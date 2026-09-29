@@ -266,7 +266,9 @@ export async function* runLiveAgent(
 
       messages.push({
         role: 'assistant',
-        content: turn.content,
+        // 带 tool_calls 的 assistant 消息，content 必须为 null。
+        // 传空字符串在 OpenAI 官方实现上能跑通，但智谱等严格实现会直接返回 400。
+        content: turn.content.trim() ? turn.content : null,
         tool_calls: turn.toolCalls,
       })
 

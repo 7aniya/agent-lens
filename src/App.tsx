@@ -103,6 +103,110 @@ function FallbackBanner({ onOpenSettings }: { onOpenSettings: () => void }) {
   )
 }
 
+/**
+ * 运行失败提示。
+ *
+ * 失败信息原先只往右侧运行日志里塞一行字：用户既不容易注意到，
+ * 看到了也无从下手（浏览器抛出的原文往往是 `Failed to fetch` 这类零信息量的话）。
+ * 所以这里把它提到主区域，并附带请求地址、服务端原文与针对性排查建议。
+ */
+function ErrorBanner({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const { state } = useStore()
+  const [closedFor, setClosedFor] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const message = state.errorMessage
+  if (state.status !== 'error' || !message || closedFor === message) return null
+
+  const [headline, ...rest] = message.split('\n')
+  const hasDetail = rest.join('').trim().length > 0
+
+  const copyDetail = async () => {
+    try {
+      await navigator.clipboard.writeText(message)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="error-banner" role="alert">
+        <span className="error-icon" aria-hidden>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="M12 7.8v4.6" strokeLinecap="round" />
+            <circle cx="12" cy="15.9" r="0.9" fill="currentColor" stroke="none" />
+          </svg>
+        </span>
+        <div className="error-text">
+          <strong>{headline}</strong>
+          <span>
+            运行已中断。展开详情可以看到请求地址、服务端返回的原文，以及按状态码给出的排查建议。
+          </span>
+        </div>
+        {hasDetail && (
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setDetailOpen(true)}>
+            查看详情
+          </button>
+        )}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenSettings}>
+          去设置
+        </button>
+        <button
+          type="button"
+          className="btn btn-icon btn-sm"
+          onClick={() => setClosedFor(message)}
+          aria-label="关闭提示"
+          title="关闭提示"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+
+      {detailOpen && (
+        <div className="drawer-mask" onClick={() => setDetailOpen(false)} role="presentation">
+          <aside className="drawer drawer-narrow" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-head">
+              <h2>运行失败详情</h2>
+              <button
+                type="button"
+                className="btn btn-icon"
+                onClick={() => setDetailOpen(false)}
+                aria-label="关闭"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="drawer-body">
+              <pre className="error-detail">{message}</pre>
+              <div className="drawer-actions">
+                <button type="button" className="btn btn-soft" onClick={() => void copyDetail()}>
+                  {copied ? '已复制' : '复制详情'}
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={onOpenSettings}>
+                  去设置里检查
+                </button>
+              </div>
+              <p className="field-hint">
+                提示：Mock 离线模式不依赖任何外部接口，如果只想演示功能，切回 Mock
+                即可稳定跑通——真实模型模式的问题通常集中在 Key、模型名与跨域三处。
+              </p>
+            </div>
+          </aside>
+        </div>
+      )}
+    </>
+  )
+}
+
 function Shell() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -114,6 +218,7 @@ function Shell() {
         onOpenHistory={() => setHistoryOpen(true)}
       />
       <FallbackBanner onOpenSettings={() => setSettingsOpen(true)} />
+      <ErrorBanner onOpenSettings={() => setSettingsOpen(true)} />
       <main className="app-grid">
         <PlanPanel />
         <StreamPanel />

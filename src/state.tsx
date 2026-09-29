@@ -74,6 +74,12 @@ export interface State {
   activeMode: RunMode | null
   /** 发生回退时的说明文案，为空表示没有回退 */
   fallbackReason: string | null
+  /**
+   * 本次运行失败的完整说明（多行，含针对性排查建议）。
+   * 失败时如果只往运行日志里塞一行字，用户很难注意到，也无从下手排查，
+   * 因此单独存一份供主区域的错误卡片展示。
+   */
+  errorMessage: string | null
 }
 
 export type Action =
@@ -131,6 +137,7 @@ export function createInitialState(): State {
     selectedNodeId: null,
     activeMode: null,
     fallbackReason: null,
+    errorMessage: null,
     ...persisted,
   }
 }
@@ -153,6 +160,7 @@ function reduceEvent(state: State, event: AgentEvent): State {
         endedAt: null,
         activeMode: event.mode,
         fallbackReason: null,
+        errorMessage: null,
         nodes: [],
         timeline: [],
         messages: [],
@@ -280,6 +288,7 @@ function reduceEvent(state: State, event: AgentEvent): State {
       return {
         ...state,
         status: 'error',
+        errorMessage: event.message,
         logs: [
           ...state.logs,
           { id: nextId('log'), level: 'error', text: event.message, at: Date.now() },
@@ -317,6 +326,7 @@ export function reducer(state: State, action: Action): State {
         selectedNodeId: null,
         activeMode: null,
         fallbackReason: null,
+        errorMessage: null,
       }
 
     case 'patch_settings': {
@@ -371,6 +381,7 @@ export function reducer(state: State, action: Action): State {
           logs: [],
           activeMode: null,
           fallbackReason: null,
+          errorMessage: null,
         },
       )
 

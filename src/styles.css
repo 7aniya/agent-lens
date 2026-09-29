@@ -339,6 +339,111 @@ code {
   align-self: center;
 }
 
+/* ---------- 运行失败提示 ---------- */
+
+.error-banner {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+}
+
+.error-icon {
+  display: flex;
+  margin-top: 2px;
+  color: var(--danger);
+  flex: 0 0 auto;
+}
+
+.error-text {
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.error-text strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.error-text span {
+  color: var(--text-2);
+}
+
+.error-banner .btn {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.error-detail {
+  margin: 0 0 6px;
+  padding: 11px;
+  max-height: 52vh;
+  overflow: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- 连接自检 ---------- */
+
+.probe-box {
+  margin: 4px 0 11px;
+}
+
+.probe-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.probe-badge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.probe-badge.is-ok {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.probe-badge.is-bad {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.probe-note {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.probe-box .error-detail {
+  margin-top: 9px;
+}
+
+.probe-box .field-hint b {
+  color: var(--text-2);
+}
+
 /* ============================ 按钮 ============================ */
 
 .btn {

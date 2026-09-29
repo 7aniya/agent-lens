@@ -4,6 +4,7 @@ import { AVAILABLE_TOOLS } from '../agent/runtime'
 import { BUILTIN_CORPUS, type KnowledgeDoc } from '../agent/corpus'
 import { buildRuntimeIndex } from '../agent/runtime'
 import { PROVIDER_PRESETS, matchPreset } from '../agent/providers'
+import { probeConnection, type ProbeResult } from '../agent/llm'
 import type { RunMode } from '../agent/types'
 
 const SPEEDS = [1, 2, 4]
@@ -27,6 +28,19 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   const switchMode = (mode: RunMode) => {
     dispatch({ type: 'patch_settings', settings: { mode } })
     setShowLLMConfig(mode === 'live')
+  }
+
+  // 连接自检：把「配置能不能用」和「配置错在哪」分开，
+  // 用户不用跑整个 Agent 就能定位问题。
+  const [probing, setProbing] = useState(false)
+  const [probe, setProbe] = useState<ProbeResult | null>(null)
+
+  const runProbe = async () => {
+    setProbing(true)
+    setProbe(null)
+    const result = await probeConnection(settings.llm)
+    setProbe(result)
+    setProbing(false)
   }
 
   const updateLLM = (patch: Partial<typeof settings.llm>) => {
@@ -225,6 +239,43 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                 onChange={(e) => updateLLM({ temperature: Number(e.target.value) })}
               />
             </label>
+            <div className="probe-box">
+              <div className="probe-head">
+                <button
+                  type="button"
+                  className="btn btn-soft btn-sm"
+                  onClick={() => void runProbe()}
+                  disabled={probing || !settings.llm.apiKey.trim()}
+                >
+                  {probing ? '测试中…' : '测试连接'}
+                </button>
+                {probe && (
+                  <span className={`probe-badge ${probe.ok ? 'is-ok' : 'is-bad'}`}>
+                    {probe.ok
+                      ? `连接正常 · ${probe.latencyMs}ms`
+                      : `连接失败 · ${probe.latencyMs}ms`}
+                  </span>
+                )}
+                {!settings.llm.apiKey.trim() && (
+                  <span className="probe-note">填入 API Key 后可测试</span>
+                )}
+              </div>
+
+              {probe?.ok && (
+                <p className="field-hint">
+                  接口 {probe.endpoint}；服务端回显模型 <b>{probe.echoModel || '（未返回）'}</b>；
+                  回复「{probe.reply || '（空）'}」。
+                  {probe.echoModel && probe.echoModel !== probe.model && (
+                    <>
+                      {' '}
+                      注意：回显模型与填写的模型名不一致，可能是服务端做了别名映射或路由。
+                    </>
+                  )}
+                </p>
+              )}
+              {probe && !probe.ok && <pre className="error-detail">{probe.error}</pre>}
+            </div>
+
             <p className="field-hint">
               以上服务的跨域支持均为实测结果。若换成未开放 CORS 的接口（例如
               z.ai 国际站），会出现浏览器拦截，此时可部署到 Vercel 后启用仓库内的{' '}
