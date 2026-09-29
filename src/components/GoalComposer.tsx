@@ -67,10 +67,11 @@ export function GoalComposer() {
 
       <div className="composer-row">
         <textarea
+          id="goal-input"
           className="composer-input"
           value={value}
           rows={1}
-          placeholder="描述一个目标，例如：分析储能电站热失控的预警依据与处置流程"
+          placeholder="描述一个目标，例如：南沙园区光伏电站未来两天的出力预测"
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {

@@ -74,6 +74,33 @@ function HistoryDrawer({ onClose }: { onClose: () => void }) {
   )
 }
 
+function FallbackBanner({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const { state } = useStore()
+  if (!state.fallbackReason) return null
+
+  return (
+    <div className="fallback-banner" role="status">
+      <span className="fallback-icon" aria-hidden>
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M12 8.5v5" strokeLinecap="round" />
+          <circle cx="12" cy="16.6" r="0.9" fill="currentColor" stroke="none" />
+          <path d="M10.3 3.6 2.4 17.2A2 2 0 0 0 4.1 20.2h15.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z" strokeLinejoin="round" />
+        </svg>
+      </span>
+      <div className="fallback-text">
+        <strong>本次运行并未使用真实模型。</strong>
+        <span>
+          {state.fallbackReason}。你看到的规划、工具调用与回答全部来自本地 Mock
+          运行时，所以和 Mock 模式下的结果一致——这是预期行为，不是切换失效。
+        </span>
+      </div>
+      <button type="button" className="btn btn-primary btn-sm" onClick={onOpenSettings}>
+        去填写 API Key
+      </button>
+    </div>
+  )
+}
+
 function Shell() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -84,6 +111,7 @@ function Shell() {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenHistory={() => setHistoryOpen(true)}
       />
+      <FallbackBanner onOpenSettings={() => setSettingsOpen(true)} />
       <main className="app-grid">
         <PlanPanel />
         <StreamPanel />

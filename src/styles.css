@@ -268,6 +268,77 @@ code {
   box-shadow: 0 0 0 3px var(--success-soft);
 }
 
+/* 选了「真实模型」但缺 Key —— 用警告色，且可点击直接去填 */
+.mode-chip {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.mode-warn {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.mode-warn .mode-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--warn-soft);
+}
+
+.mode-chip-cta {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--warn);
+  color: #1a1206;
+}
+
+/* ==================== 模式回退提示条 ==================== */
+
+.fallback-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+
+.fallback-icon {
+  display: flex;
+  margin-top: 2px;
+  color: var(--warn);
+  flex: 0 0 auto;
+}
+
+.fallback-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.fallback-text strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fallback-text span {
+  color: var(--text-2);
+}
+
+.fallback-banner .btn {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
 /* ============================ 按钮 ============================ */
 
 .btn {
@@ -302,6 +373,12 @@ code {
   background: var(--accent-soft);
   border-color: transparent;
   color: var(--accent);
+}
+
+.btn-sm {
+  padding: 4px 11px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
 }
 
 .btn-primary {
@@ -432,6 +509,15 @@ code {
   color: var(--muted);
   font-size: 12.5px;
   line-height: 1.7;
+}
+
+.empty-hint p {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.empty-cta {
+  margin-top: 12px;
 }
 
 .empty-center {
@@ -1200,6 +1286,13 @@ code {
   color: #b8c0ca;
 }
 
+/* 浅色主题下阴影要收敛，否则底部常驻的输入框会显得很脏 */
+@media (max-width: 1140px) {
+  [data-theme="light"] .composer {
+    box-shadow: 0 -10px 22px -14px rgba(0, 0, 0, 0.22);
+  }
+}
+
 .log-text {
   color: var(--muted);
   word-break: break-word;
@@ -1483,6 +1576,22 @@ input[type="range"] {
   word-break: break-all;
 }
 
+.inline-warn {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.inline-warn b {
+  color: var(--warn);
+  font-weight: 600;
+}
+
 .field-hint a:hover {
   border-bottom-style: solid;
 }
@@ -1644,6 +1753,26 @@ input[type="range"] {
   }
   .panel-center {
     min-height: 520px;
+  }
+  /*
+   * 窄屏下三个面板改成单列堆叠，总高度一千多像素，
+   * 目标输入框会被压到页面最底部、初始渲染时完全在视口之外，
+   * 用户会误以为「输入不了文字」。这里把它钉在视口底部常驻。
+   */
+  .composer {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    margin-top: 10px;
+    background: var(--panel);
+    box-shadow: 0 -10px 22px -10px rgba(0, 0, 0, 0.45);
+  }
+  .fallback-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .fallback-banner .btn {
+    align-self: flex-start;
   }
   .brand-sub {
     display: none;

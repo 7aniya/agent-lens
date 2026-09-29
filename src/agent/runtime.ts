@@ -386,14 +386,31 @@ export async function* runAgent(
     yield* runLiveAgent(goal, ctx)
     return
   }
-  if (ctx.settings.mode === 'live') {
-    yield {
-      type: 'log',
-      level: 'warn',
-      text: '未配置 API Key，已自动回退到 Mock 模式。可在右上角「设置」中填写。',
+
+  const fellBack = ctx.settings.mode === 'live'
+  let emitted = false
+
+  for await (const event of runMockAgent(goal, ctx)) {
+    yield event
+    // runMockAgent 的第一个事件一定是 run_start，而 run_start 会清空回退标记。
+    // 所以回退事件必须排在它之后发，否则会被清掉，用户依然以为「切了模式没反应」。
+    if (!emitted) {
+      emitted = true
+      if (fellBack) {
+        yield {
+          type: 'mode_fallback',
+          requested: 'live',
+          actual: 'mock',
+          reason: '未配置 API Key，本次实际以 Mock 模式运行',
+        }
+        yield {
+          type: 'log',
+          level: 'warn',
+          text: '未配置 API Key，已自动回退到 Mock 模式。可在右上角「设置」中填写。',
+        }
+      }
     }
   }
-  yield* runMockAgent(goal, ctx)
 }
 
 export const AVAILABLE_TOOLS = TOOL_REGISTRY

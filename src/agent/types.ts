@@ -86,6 +86,13 @@ export interface RunUsage {
  */
 export type AgentEvent =
   | { type: 'run_start'; runId: string; goal: string; mode: RunMode; startedAt: number }
+  /**
+   * 运行模式回退。设置里选了「真实模型」但缺少 API Key 时触发，
+   * 用于让界面显式告知用户「本次实际按 Mock 跑的」。
+   * 这是独立事件而不是普通日志：回退会改变本次运行的性质，
+   * 只写进日志会被忽略，用户看到的就是「切了模式但结果没变」。
+   */
+  | { type: 'mode_fallback'; requested: RunMode; actual: RunMode; reason: string }
   | { type: 'plan'; nodes: PlanNode[] }
   | { type: 'node_status'; nodeId: string; status: NodeStatus; at: number }
   | { type: 'message_start'; messageId: string; role: MessageRole; kind?: 'think' | 'answer' }

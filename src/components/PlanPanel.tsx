@@ -45,6 +45,20 @@ export function PlanPanel() {
       {nodes.length === 0 ? (
         <div className="empty-hint">
           <p>输入一个目标并运行，Agent 会把任务拆解成步骤显示在这里。</p>
+          {/* 输入框在页面底部，窄屏下很容易被忽略。
+              这里给一个直接入口：点了会滚动过去并聚焦，
+              省得用户以为「这个面板打不了字」。 */}
+          <button
+            type="button"
+            className="btn btn-soft btn-sm empty-cta"
+            onClick={() => {
+              const input = document.getElementById('goal-input')
+              input?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+              ;(input as HTMLTextAreaElement | null)?.focus()
+            }}
+          >
+            开始输入目标
+          </button>
         </div>
       ) : (
         <>

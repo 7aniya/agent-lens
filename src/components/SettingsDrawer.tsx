@@ -73,6 +73,13 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               Mock 模式完全离线、结果可复现，调用的是真实工具实现，适合演示与自测；
               真实模型模式需要填写 OpenAI 兼容接口的 Base URL 与 API Key。
             </p>
+            {settings.mode === 'live' && !settings.llm.apiKey.trim() && (
+              <p className="inline-warn">
+                当前 <b>API Key 为空</b>，运行时会自动回退到 Mock 模式，
+                所以结果会和 Mock 模式下完全一致——这不是切换失效。
+                在下面的预设里选一个填上 Key，才会真正调用模型。
+              </p>
+            )}
           </section>
 
           <section className="drawer-section">

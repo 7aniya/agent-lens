@@ -22,6 +22,7 @@ import type {
   ChatMessage,
   PlanNode,
   RetrievalHit,
+  RunMode,
   RunRecord,
   RunUsage,
   ToolCall,
@@ -65,6 +66,14 @@ export interface State {
   docs: KnowledgeDoc[]
   theme: 'dark' | 'light'
   selectedNodeId: string | null
+  /**
+   * 本次运行**实际**使用的模式（来自 run_start 事件），而不是设置里选的那个。
+   * 两者可能不一致：选了真实模型但没填 Key 会回退到 mock。
+   * 界面上的模式标识必须以这个为准，否则会误导用户。
+   */
+  activeMode: RunMode | null
+  /** 发生回退时的说明文案，为空表示没有回退 */
+  fallbackReason: string | null
 }
 
 export type Action =
@@ -119,6 +128,8 @@ export function createInitialState(): State {
     usage: null,
     records: [],
     selectedNodeId: null,
+    activeMode: null,
+    fallbackReason: null,
     ...persisted,
   }
 }
@@ -139,6 +150,8 @@ function reduceEvent(state: State, event: AgentEvent): State {
         status: 'running',
         startedAt: event.startedAt,
         endedAt: null,
+        activeMode: event.mode,
+        fallbackReason: null,
         nodes: [],
         timeline: [],
         messages: [],
@@ -256,6 +269,9 @@ function reduceEvent(state: State, event: AgentEvent): State {
         logs: [...state.logs, { id: nextId('log'), level: event.level, text: event.text, at: Date.now() }],
       }
 
+    case 'mode_fallback':
+      return { ...state, fallbackReason: event.reason }
+
     case 'run_end':
       return { ...state, status: event.status, endedAt: event.endedAt }
 
@@ -298,10 +314,20 @@ export function reducer(state: State, action: Action): State {
         logs: [],
         usage: null,
         selectedNodeId: null,
+        activeMode: null,
+        fallbackReason: null,
       }
 
-    case 'patch_settings':
-      return { ...state, settings: { ...state.settings, ...action.settings } }
+    case 'patch_settings': {
+      const settings = { ...state.settings, ...action.settings }
+      return {
+        ...state,
+        settings,
+        // 切回 Mock 或补上 Key 之后，回退提示就不再适用了
+        fallbackReason:
+          settings.mode === 'mock' || settings.llm.apiKey.trim() ? null : state.fallbackReason,
+      }
+    }
 
     case 'set_docs':
       return { ...state, docs: action.docs }
@@ -328,6 +354,8 @@ export function reducer(state: State, action: Action): State {
     }
 
     case 'load_record':
+      // 回放时会重新走一遍 run_start / mode_fallback，
+      // 因此这里要把两者清空，避免沿用上一次的模式标识。
       return action.record.events.reduce<State>(
         (acc, ev) => reduceEvent(acc, ev),
         {
@@ -340,6 +368,8 @@ export function reducer(state: State, action: Action): State {
           retrievals: [],
           charts: [],
           logs: [],
+          activeMode: null,
+          fallbackReason: null,
         },
       )
 
