@@ -3,6 +3,7 @@ import { useStore } from '../state'
 import { AVAILABLE_TOOLS } from '../agent/runtime'
 import { BUILTIN_CORPUS, type KnowledgeDoc } from '../agent/corpus'
 import { buildRuntimeIndex } from '../agent/runtime'
+import { PROVIDER_PRESETS, matchPreset } from '../agent/providers'
 
 const SPEEDS = [1, 2, 4]
 
@@ -13,6 +14,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   const [notice, setNotice] = useState<string | null>(null)
 
   const stats = useMemo(() => buildRuntimeIndex(docs), [docs])
+  const activePreset = matchPreset(settings.llm)
 
   const updateLLM = (patch: Partial<typeof settings.llm>) => {
     dispatch({ type: 'patch_settings', settings: { llm: { ...settings.llm, ...patch } } })
@@ -74,14 +76,61 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
           </section>
 
           <section className="drawer-section">
-            <h3>模型配置</h3>
+            <h3>
+              模型配置
+              <span className="section-meta">OpenAI 兼容</span>
+            </h3>
+
+            <div className="preset-grid">
+              {PROVIDER_PRESETS.map((preset) => {
+                const active = activePreset === preset.id
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`preset-card ${active ? 'is-on' : ''}`}
+                    onClick={() =>
+                      updateLLM({
+                        baseUrl: preset.config.baseUrl,
+                        model: preset.config.model,
+                      })
+                    }
+                  >
+                    <span className="preset-name">
+                      {preset.name}
+                      {preset.permanentFree && <em className="preset-tag">永久免费</em>}
+                    </span>
+                    <span className="preset-note">{preset.freeNote}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            <p className="field-hint">
+              {activePreset
+                ? (() => {
+                    const p = PROVIDER_PRESETS.find((x) => x.id === activePreset)!
+                    return (
+                      <>
+                        已选中「{p.name}」。申请 Key：
+                        <a href={p.signupUrl} target="_blank" rel="noreferrer">
+                          {p.signupUrl}
+                        </a>
+                        {p.corsOk ? '（实测支持浏览器直连）' : '（需服务端代理）'}
+                      </>
+                    )
+                  })()
+                : '未匹配到预设，当前为自定义配置。点上方任意卡片可一键填入。'}{' '}
+              Key 只存在浏览器 localStorage，不会上传。
+            </p>
+
             <label className="field">
               <span className="field-label">Base URL</span>
               <input
                 className="input"
                 value={settings.llm.baseUrl}
                 onChange={(e) => updateLLM({ baseUrl: e.target.value })}
-                placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                placeholder="https://open.bigmodel.cn/api/paas/v4"
                 spellCheck={false}
               />
             </label>
@@ -102,7 +151,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                 className="input"
                 value={settings.llm.model}
                 onChange={(e) => updateLLM({ model: e.target.value })}
-                placeholder="qwen-plus"
+                placeholder="glm-4.7-flash"
                 spellCheck={false}
               />
             </label>
@@ -120,8 +169,9 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               />
             </label>
             <p className="field-hint">
-              API Key 只保存在浏览器 localStorage，不会上传到任何服务器。
-              若所调用服务未开启 CORS，可在 Vercel 部署后使用仓库内的 <code>api/llm-proxy.ts</code> 代理。
+              以上服务的跨域支持均为实测结果。若换成未开放 CORS 的接口（例如
+              z.ai 国际站），会出现浏览器拦截，此时可部署到 Vercel 后启用仓库内的{' '}
+              <code>api/llm-proxy.ts</code>，把 Key 放到服务端环境变量里。
             </p>
           </section>
 

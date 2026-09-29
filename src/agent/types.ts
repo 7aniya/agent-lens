@@ -133,9 +133,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mode: 'mock',
   speed: 1,
   llm: {
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    // 默认指向智谱 GLM-4.7-Flash：目前少见的「永久免费」且支持工具调用的接口，
+    // 用户注册后拿到 Key 填进设置即可切到真实模型，无需任何付费。
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     apiKey: '',
-    model: 'qwen-plus',
+    model: 'glm-4.7-flash',
     temperature: 0.3,
   },
 }

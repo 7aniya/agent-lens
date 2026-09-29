@@ -80,18 +80,27 @@ npm run dev
 
 ### 接入真实模型
 
-点击右上角 **设置** → 运行模式选「真实模型」，填入：
+点击右上角 **设置** → 运行模式选「真实模型」。设置面板内置了 7 个预设，**点一下自动填好 Base URL 与模型名**，你只需要填 Key：
 
-| 字段 | 示例 |
-| --- | --- |
-| Base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| API Key | `sk-xxxxxxxx` |
-| 模型名 | `qwen-plus` |
+| 服务 | Base URL | 推荐模型 | 免费政策 | 浏览器直连 |
+| --- | --- | --- | --- | --- |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.7-flash` | **永久免费**（200K 上下文，支持工具调用） | ✅ |
+| 智谱 GLM（轻量） | 同上 | `glm-4.5-flash` | **永久免费**，延迟更低 | ✅ |
+| 魔搭 ModelScope | `https://api-inference.modelscope.cn/v1` | `Qwen/Qwen3-8B` | 每日 2000 次，每日重置 | ✅ |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-8B` | 注册赠 2000 万 token；9B 以下永久免费 | ✅ |
+| OpenRouter | `https://openrouter.ai/api/v1` | `qwen/qwen3.8-27b:free` | 16 个 `:free` 模型，有每日次数上限 | ✅ |
+| 阿里百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 新用户赠千万级 token | ✅ |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | 注册赠额度，用完后单价极低 | ✅ |
 
-只要服务商兼容 OpenAI 的 `/chat/completions` 协议就能用，例如：阿里百炼、DeepSeek、Moonshot、智谱、本地 Ollama、vLLM。
+统一只依赖 OpenAI 的 `/chat/completions` 协议，换服务商不用改代码。
 
+> **关于「浏览器直连」这一列**：上表结果由 `OPTIONS` 预检请求实测得出（2026-09）。
+> 未开放 CORS 的接口（例如 z.ai 国际站）前端会直接被浏览器拦截，需要走服务端代理。
+> 这类接口的实际表现是请求根本没发出去、控制台报 CORS 错误，而不是返回 4xx ——
+> 排查时容易误判成鉴权问题，所以我把实测结果直接标在界面上。
+>
 > API Key 仅保存在浏览器 `localStorage`，不会上传到任何服务器。
-> 如果服务商未开放浏览器 CORS，可使用仓库内 `api/llm-proxy.ts` 代理（见下方「部署」）。
+> 若需要把 Key 藏到服务端，可使用仓库内 `api/llm-proxy.ts`（见下方「部署」）。
 
 ---
 
