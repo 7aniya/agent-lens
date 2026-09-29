@@ -1592,6 +1592,51 @@ input[type="range"] {
   font-weight: 600;
 }
 
+/* Mock 模式下模型配置不生效：收起并说明，避免两个模式的面板长得一模一样 */
+.config-off {
+  padding: 11px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+
+.config-off p {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.config-off b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.inline-note {
+  margin-bottom: 11px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.inline-note b {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.field-hint b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.segmented.is-off {
+  opacity: 0.5;
+}
+
 .field-hint a:hover {
   border-bottom-style: solid;
 }

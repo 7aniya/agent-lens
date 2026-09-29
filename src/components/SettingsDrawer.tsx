@@ -4,6 +4,7 @@ import { AVAILABLE_TOOLS } from '../agent/runtime'
 import { BUILTIN_CORPUS, type KnowledgeDoc } from '../agent/corpus'
 import { buildRuntimeIndex } from '../agent/runtime'
 import { PROVIDER_PRESETS, matchPreset } from '../agent/providers'
+import type { RunMode } from '../agent/types'
 
 const SPEEDS = [1, 2, 4]
 
@@ -12,9 +13,21 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   const { settings, docs } = state
   const fileRef = useRef<HTMLInputElement>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  /**
+   * 模型配置区是否展开。
+   * Mock 模式下这份配置完全不生效（不发任何网络请求），
+   * 若与真实模型模式展示得一模一样，用户会以为「切换模式没区别」。
+   * 因此默认跟随模式：切到真实模型自动展开，切回 Mock 自动收起。
+   */
+  const [showLLMConfig, setShowLLMConfig] = useState(settings.mode === 'live')
 
   const stats = useMemo(() => buildRuntimeIndex(docs), [docs])
   const activePreset = matchPreset(settings.llm)
+
+  const switchMode = (mode: RunMode) => {
+    dispatch({ type: 'patch_settings', settings: { mode } })
+    setShowLLMConfig(mode === 'live')
+  }
 
   const updateLLM = (patch: Partial<typeof settings.llm>) => {
     dispatch({ type: 'patch_settings', settings: { llm: { ...settings.llm, ...patch } } })
@@ -63,15 +76,18 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                   key={mode}
                   type="button"
                   className={`segment ${settings.mode === mode ? 'is-on' : ''}`}
-                  onClick={() => dispatch({ type: 'patch_settings', settings: { mode } })}
+                  onClick={() => switchMode(mode)}
                 >
                   {mode === 'mock' ? 'Mock 离线' : '真实模型'}
                 </button>
               ))}
             </div>
             <p className="field-hint">
-              Mock 模式完全离线、结果可复现，调用的是真实工具实现，适合演示与自测；
-              真实模型模式需要填写 OpenAI 兼容接口的 Base URL 与 API Key。
+              <b>Mock 离线</b>：内置确定性规划器 + 浏览器本地 BM25 检索，规划、工具调用、
+              图表全部在浏览器内完成，不发任何网络请求，结果可复现。
+              <br />
+              <b>真实模型</b>：由大模型自主拆解任务、决定调用哪个工具，需要下方配置
+              OpenAI 兼容接口的 Base URL 与 API Key。
             </p>
             {settings.mode === 'live' && !settings.llm.apiKey.trim() && (
               <p className="inline-warn">
@@ -85,10 +101,44 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
           <section className="drawer-section">
             <h3>
               模型配置
-              <span className="section-meta">OpenAI 兼容</span>
+              <span className="section-meta">
+                {settings.mode === 'live' ? 'OpenAI 兼容' : 'Mock 模式不生效'}
+              </span>
             </h3>
 
-            <div className="preset-grid">
+            {settings.mode === 'mock' && !showLLMConfig ? (
+              <div className="config-off">
+                <p>
+                  当前是 <b>Mock 离线模式</b>，模型配置<b>不生效</b>：规划、检索、
+                  工具调用全部在浏览器内完成，不会调用任何外部接口，也不需要 API Key。
+                </p>
+                <div className="drawer-actions">
+                  <button
+                    type="button"
+                    className="btn btn-soft btn-sm"
+                    onClick={() => switchMode('live')}
+                  >
+                    切换到真实模型并配置
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setShowLLMConfig(true)}
+                  >
+                    先填好 Key
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {settings.mode === 'mock' && (
+                  <p className="inline-note">
+                    当前仍是 <b>Mock 离线模式</b>，以下配置会保存但暂不生效；
+                    切到「真实模型」后立即启用。
+                  </p>
+                )}
+
+                <div className="preset-grid">
               {PROVIDER_PRESETS.map((preset) => {
                 const active = activePreset === preset.id
                 return (
@@ -180,11 +230,13 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               z.ai 国际站），会出现浏览器拦截，此时可部署到 Vercel 后启用仓库内的{' '}
               <code>api/llm-proxy.ts</code>，把 Key 放到服务端环境变量里。
             </p>
+              </>
+            )}
           </section>
 
           <section className="drawer-section">
             <h3>演示速度</h3>
-            <div className="segmented">
+            <div className={`segmented ${settings.mode === 'live' ? 'is-off' : ''}`}>
               {SPEEDS.map((speed) => (
                 <button
                   key={speed}
@@ -196,7 +248,11 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                 </button>
               ))}
             </div>
-            <p className="field-hint">仅影响 Mock 模式的流式速度，便于录制演示视频。</p>
+            <p className="field-hint">
+              {settings.mode === 'live'
+                ? '当前是真实模型模式，流式速度由服务端决定，此项不生效。'
+                : '仅影响 Mock 模式的流式速度，便于录制演示视频。'}
+            </p>
           </section>
 
           <section className="drawer-section">
