@@ -1349,6 +1349,50 @@ code {
   line-height: 1.5;
 }
 
+/* 每条历史记录的删除按钮：与卡片等高并排在末尾，与主点击区完全分离 */
+.record-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.record-row .record-item {
+  flex: 1 1 auto;
+  /* 覆盖 .record-item 的 width:100%：在 flex 行里会让条目撑破容器，挤掉删除按钮 */
+  width: auto;
+  min-width: 0;
+}
+
+.record-del {
+  flex: 0 0 auto;
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+/* 右侧面板的列表更窄，删除按钮收窄一档 */
+.record-list:not(.record-list-lg) .record-del {
+  width: 28px;
+}
+
+.record-del:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.record-del:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ============================ 输入区 ============================ */
 
 .composer {

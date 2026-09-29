@@ -86,6 +86,7 @@ export type Action =
   | { type: 'select_node'; nodeId: string | null }
   | { type: 'save_record'; events: AgentEvent[] }
   | { type: 'load_record'; record: RunRecord }
+  | { type: 'delete_record'; id: string }
   | { type: 'clear_records' }
 
 const STORAGE_KEY = 'agentlens.state.v1'
@@ -372,6 +373,10 @@ export function reducer(state: State, action: Action): State {
           fallbackReason: null,
         },
       )
+
+    case 'delete_record':
+      // 只从历史列表移除；若这条记录正被回放展示，当前视图保持不动。
+      return { ...state, records: state.records.filter((r) => r.id !== action.id) }
 
     case 'clear_records':
       return { ...state, records: [] }

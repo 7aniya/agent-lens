@@ -6,6 +6,7 @@ import { StreamPanel } from './components/StreamPanel'
 import { TracePanel } from './components/TracePanel'
 import { GoalComposer } from './components/GoalComposer'
 import { SettingsDrawer } from './components/SettingsDrawer'
+import { RecordDeleteButton } from './components/RecordDeleteButton'
 
 function HistoryDrawer({ onClose }: { onClose: () => void }) {
   const { state, dispatch } = useStore()
@@ -32,7 +33,7 @@ function HistoryDrawer({ onClose }: { onClose: () => void }) {
           ) : (
             <ul className="record-list record-list-lg">
               {records.map((record) => (
-                <li key={record.id}>
+                <li key={record.id} className="record-row">
                   <button
                     type="button"
                     className="record-item"
@@ -53,6 +54,7 @@ function HistoryDrawer({ onClose }: { onClose: () => void }) {
                       })}
                     </span>
                   </button>
+                  <RecordDeleteButton id={record.id} goal={record.goal} />
                 </li>
               ))}
             </ul>

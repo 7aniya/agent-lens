@@ -1,4 +1,5 @@
 import { useStore } from '../state'
+import { RecordDeleteButton } from './RecordDeleteButton'
 
 function formatMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`
@@ -133,7 +134,7 @@ export function TracePanel() {
           </div>
           <ul className="record-list">
             {state.records.slice(0, 5).map((record) => (
-              <li key={record.id}>
+              <li key={record.id} className="record-row">
                 <button
                   type="button"
                   className="record-item"
@@ -145,6 +146,7 @@ export function TracePanel() {
                     {formatMs((record.endedAt ?? record.startedAt) - record.startedAt)}
                   </span>
                 </button>
+                <RecordDeleteButton id={record.id} goal={record.goal} />
               </li>
             ))}
           </ul>
