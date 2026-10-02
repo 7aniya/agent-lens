@@ -5,6 +5,7 @@ dist-ssr
 .DS_Store
 .vercel
 *.log
+*.tsbuildinfo
 .env
 .env.local
 .vscode/*
