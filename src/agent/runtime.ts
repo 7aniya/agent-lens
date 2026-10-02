@@ -19,7 +19,7 @@ import { BUILTIN_CORPUS } from './corpus'
 import type { KnowledgeDoc } from './corpus'
 import { buildMockPlan, planWithLLM } from './planner'
 import type { MockToolResult } from './planner'
-import { chatTurn, streamChat } from './llm'
+import { chatTurn, streamChat, hasApiKey } from './llm'
 import type { LLMMessage } from './llm'
 
 export interface RuntimeContext {
@@ -384,7 +384,7 @@ export async function* runAgent(
   goal: string,
   ctx: RuntimeContext,
 ): AsyncGenerator<AgentEvent> {
-  if (ctx.settings.mode === 'live' && ctx.settings.llm.apiKey.trim()) {
+  if (ctx.settings.mode === 'live' && hasApiKey(ctx.settings.llm)) {
     yield* runLiveAgent(goal, ctx)
     return
   }

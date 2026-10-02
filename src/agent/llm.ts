@@ -89,10 +89,129 @@ function endpoint(config: LLMConfig): string {
   return `${base}/chat/completions`
 }
 
+/**
+ * 归一化 API Key。
+ *
+ * 两件事都得做，缺一个就会变成用户看不懂、还会被误导的报错：
+ *  1. 剥掉零宽不可见字符（U+200B~U+200D、BOM）——从网页控制台复制时的常客，
+ *     肉眼完全看不出来，服务端却会判为无效 Key 返回 401。
+ *  2. 剥掉所有空白字符——Key 本身不可能含空白。尤其是换行：
+ *     fetch 见到请求头里有换行会直接拒绝构造请求并抛 `Invalid value`，
+ *     报错看起来像网络或跨域问题，实际只是粘贴时多选了内容。
+ */
+export function normalizeApiKey(apiKey: string): string {
+  return apiKey.replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, '')
+}
+
 function headers(config: LLMConfig): Record<string, string> {
   return {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${config.apiKey.trim()}`,
+    Authorization: `Bearer ${normalizeApiKey(config.apiKey)}`,
+  }
+}
+
+/** 判断配置里是否真有一把能发出去的 Key：全是空白或零宽字符都算没填 */
+export function hasApiKey(config: LLMConfig): boolean {
+  return normalizeApiKey(config.apiKey).length > 0
+}
+
+/** 常见平台的 Key 形态，自检时用来回答「这里的 Key 应该长什么样」 */
+const KEY_SHAPES: { match: RegExp; platform: string; shape: string }[] = [
+  {
+    match: /bigmodel\.cn/,
+    platform: '智谱开放平台（open.bigmodel.cn）',
+    shape: '形如 xxxxxxxx.yyyyyyyy，中间一个英文句点，约 40~50 位，不以 sk- 开头',
+  },
+  {
+    match: /z\.ai/,
+    platform: '智谱国际站（z.ai）',
+    shape: '与 open.bigmodel.cn 是两套独立账号，两边 Key 不能互换',
+  },
+  { match: /deepseek\.com/, platform: 'DeepSeek', shape: '通常以 sk- 开头' },
+  { match: /siliconflow\.cn/, platform: '硅基流动', shape: '通常以 sk- 开头' },
+  { match: /aliyuncs\.com/, platform: '阿里百炼', shape: '通常以 sk- 开头' },
+  { match: /openrouter\.ai/, platform: 'OpenRouter', shape: '通常以 sk-or-v1- 开头' },
+  { match: /modelscope\.cn/, platform: '魔搭 ModelScope', shape: '通常以 ms- 开头' },
+]
+
+/**
+ * 一条自检结论。level 决定界面上的着色：
+ * info 是「我看到了什么」（供核对），warn 是「这看起来不对」。
+ */
+export interface KeyNote {
+  level: 'info' | 'warn'
+  text: string
+}
+
+/**
+ * Key 自检：只根据本机填写的内容做静态判断，不联网、不上传。
+ * 收到 401/403 时附在报错信息里，让用户能拿着它逐条对照控制台，
+ * 而不是只看到一句「身份验证失败」猜谜。
+ */
+export function inspectApiKey(apiKey: string, baseUrl: string): KeyNote[] {
+  const notes: KeyNote[] = []
+  const key = normalizeApiKey(apiKey)
+  const warn = (text: string) => notes.push({ level: 'warn', text })
+
+  if (!key) {
+    warn('API Key 为空，请先在「设置 → 模型配置」里填写')
+    return notes
+  }
+
+  const shape = KEY_SHAPES.find((item) => item.match.test(baseUrl))
+  const withoutInvisible = apiKey.replace(/[\u200b-\u200d\ufeff]/g, '')
+  notes.push({
+    level: 'info',
+    text: `扣除空白与不可见字符后共 ${key.length} 个字符，前 6 位 ${key.slice(0, 6)}，后 4 位 ${key.slice(-4)}——与控制台显示的长度和首尾核对一下`,
+  })
+
+  if (apiKey !== withoutInvisible) {
+    warn('Key 里含有零宽不可见字符（从网页复制时很常见），程序发送前会自动剔除')
+  }
+  if (withoutInvisible !== withoutInvisible.trim()) {
+    warn('Key 首尾带有空格或换行，程序发送前会自动剔除')
+  }
+  if (/\s/.test(withoutInvisible)) {
+    warn(
+      'Key 中间含空格或换行，几乎可以确定是复制时多选了内容——程序会自动剔除，但建议清空后重新粘贴一遍',
+    )
+  }
+  if (/^bearer\s+/i.test(key)) {
+    warn('Key 里已经带了 "Bearer " 前缀，程序发送时会再加一次，需要把这个前缀删掉')
+  }
+  if (shape) {
+    notes.push({ level: 'info', text: `当前接口属于 ${shape.platform}，该平台的 Key ${shape.shape}` })
+  }
+  if (/bigmodel\.cn/.test(baseUrl) && /^sk-/.test(key)) {
+    warn(
+      '以 sk- 开头的 Key 一般来自 OpenAI / DeepSeek / 硅基流动 / 百炼，不是智谱的格式——很可能是两个平台的配置串了',
+    )
+  }
+  if (/bigmodel\.cn/.test(baseUrl) && !key.includes('.')) {
+    warn('智谱的 Key 中间有一个英文句点，当前这段没有，可能只复制了一半')
+  }
+  if (/openrouter\.ai/.test(baseUrl) && !/^sk-or-/.test(key)) {
+    warn('OpenRouter 的 Key 以 sk-or-v1- 开头，当前格式与之不符')
+  }
+
+  return notes
+}
+
+/** 抽出服务商自己的错误码与说明（智谱形如 {"error":{"code":"1000","message":"身份验证失败。"}}） */
+function serverErrorBrief(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      error?: { code?: string | number; message?: string }
+      code?: string | number
+      message?: string
+      msg?: string
+    }
+    const code = parsed.error?.code ?? parsed.code
+    const message = parsed.error?.message ?? parsed.message ?? parsed.msg
+    if (code === undefined && !message) return null
+    return [code !== undefined ? `错误码 ${code}` : '', message ?? ''].filter(Boolean).join(' · ')
+  } catch {
+    return null
   }
 }
 
@@ -108,16 +227,38 @@ async function ensureOk(response: Response, config: LLMConfig, url: string): Pro
   }
 
   const advice = STATUS_ADVICE[response.status]
+  const brief = serverErrorBrief(detail)
   const lines = [
     `模型请求失败：HTTP ${response.status}`,
     '',
     `请求地址：${url}`,
     `模型名：${config.model}`,
-    `服务端返回：${detail}`,
   ]
+  if (brief) lines.push(`服务端说明：${brief}`)
+  lines.push(`服务端返回：${detail}`)
   if (advice) {
     lines.push('', '可能原因：')
     advice.forEach((item, i) => lines.push(`${i + 1}. ${item}`))
+  }
+  // 认证类失败光看状态码无从下手，把本机这份 Key 的实际形态摊开，
+  // 用户才能对照控制台一眼看出是「复制少了」还是「平台串了」。
+  if (response.status === 401 || response.status === 403) {
+    lines.push('', 'Key 自检（依据本机填写内容，不联网）：')
+    inspectApiKey(config.apiKey, config.baseUrl).forEach((item) => lines.push(`· ${item.text}`))
+  }
+  // 智谱对「模型名写错」只会回一句模型不存在，把可用名列出来省得去翻文档
+  if (
+    (response.status === 400 || response.status === 404) &&
+    /bigmodel\.cn/.test(config.baseUrl)
+  ) {
+    lines.push(
+      '',
+      '智谱免费档目前可用的模型名（以控制台「模型列表」为准）：',
+      '· glm-4.7-flash —— 默认选择，200K 上下文',
+      '· glm-4.5-flash —— 延迟更低，适合高频试跑',
+      '· glm-4-flash —— 老版本，兼容性最好',
+      `当前填写的是：${config.model}`,
+    )
   }
   lines.push('', '详细内容已记录到上方运行日志。')
 
@@ -151,12 +292,37 @@ async function safeFetch(
     })
   } catch (error) {
     if ((error as Error).name === 'AbortError') throw error
+    const reason = (error as Error).message
+
+    // fetch 遇到「请求地址或请求头含非法字符」时会直接抛 Invalid value，
+    // 现象很像跨域或断网，实际只是粘贴的内容里混进了换行之类的空白字符。
+    // 不单独识别出来的话，用户会照着「跨域」的建议白折腾半天。
+    if (/invalid (value|header)/i.test(reason)) {
+      throw new LLMError({
+        kind: 'network',
+        endpoint: url,
+        model: config.model,
+        text: [
+          '请求未能发出：请求地址或请求头里含有非法字符',
+          '',
+          `请求地址：${url}`,
+          `模型名：${config.model}`,
+          `浏览器报错：${reason}`,
+          '',
+          '常见原因：Base URL 或 API Key 里混进了换行、制表符等空白字符，',
+          '（粘贴时把多行内容一起复制进来最容易出现），浏览器会直接拒绝构造这个请求。',
+          '',
+          '处理：到「设置 → 模型配置」把 Base URL 和 API Key 清空后，重新粘贴一遍。',
+        ].join('\n'),
+      })
+    }
+
     const lines = [
       '请求未能发出：浏览器在发送前就中断了这次调用',
       '',
       `请求地址：${url}`,
       `模型名：${config.model}`,
-      `浏览器报错：${(error as Error).message}`,
+      `浏览器报错：${reason}`,
       '',
       '常见原因：',
       ...NETWORK_ADVICE.map((item, i) => `${i + 1}. ${item}`),

@@ -4,7 +4,7 @@ import { AVAILABLE_TOOLS } from '../agent/runtime'
 import { BUILTIN_CORPUS, type KnowledgeDoc } from '../agent/corpus'
 import { buildRuntimeIndex } from '../agent/runtime'
 import { PROVIDER_PRESETS, matchPreset } from '../agent/providers'
-import { probeConnection, type ProbeResult } from '../agent/llm'
+import { probeConnection, inspectApiKey, hasApiKey, type ProbeResult } from '../agent/llm'
 import type { RunMode } from '../agent/types'
 
 const SPEEDS = [1, 2, 4]
@@ -24,6 +24,15 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
 
   const stats = useMemo(() => buildRuntimeIndex(docs), [docs])
   const activePreset = matchPreset(settings.llm)
+  /**
+   * Key 自检：把用户填进去的字符串原样摊开（长度 + 首尾片段）。
+   * 输入框是 password 类型，填错了根本看不出来，
+   * 而 401 的绝大多数原因就是「复制不全 / 混进了空格 / 拿错平台」。
+   */
+  const keyNotes = useMemo(
+    () => (hasApiKey(settings.llm) ? inspectApiKey(settings.llm.apiKey, settings.llm.baseUrl) : []),
+    [settings.llm],
+  )
 
   const switchMode = (mode: RunMode) => {
     dispatch({ type: 'patch_settings', settings: { mode } })
@@ -103,7 +112,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               <b>真实模型</b>：由大模型自主拆解任务、决定调用哪个工具，需要下方配置
               OpenAI 兼容接口的 Base URL 与 API Key。
             </p>
-            {settings.mode === 'live' && !settings.llm.apiKey.trim() && (
+            {settings.mode === 'live' && !hasApiKey(settings.llm) && (
               <p className="inline-warn">
                 当前 <b>API Key 为空</b>，运行时会自动回退到 Mock 模式，
                 所以结果会和 Mock 模式下完全一致——这不是切换失效。
@@ -216,6 +225,15 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                 spellCheck={false}
               />
             </label>
+            {keyNotes.length > 0 && (
+              <ul className="key-check">
+                {keyNotes.map((note) => (
+                  <li key={note.text} className={note.level === 'info' ? 'is-info' : 'is-warn'}>
+                    {note.text}
+                  </li>
+                ))}
+              </ul>
+            )}
             <label className="field">
               <span className="field-label">模型名</span>
               <input
@@ -245,7 +263,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                   type="button"
                   className="btn btn-soft btn-sm"
                   onClick={() => void runProbe()}
-                  disabled={probing || !settings.llm.apiKey.trim()}
+                  disabled={probing || !hasApiKey(settings.llm)}
                 >
                   {probing ? '测试中…' : '测试连接'}
                 </button>
@@ -256,7 +274,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                       : `连接失败 · ${probe.latencyMs}ms`}
                   </span>
                 )}
-                {!settings.llm.apiKey.trim() && (
+                {!hasApiKey(settings.llm) && (
                   <span className="probe-note">填入 API Key 后可测试</span>
                 )}
               </div>

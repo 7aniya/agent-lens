@@ -1741,6 +1741,30 @@ input[type="range"] {
   font-weight: 600;
 }
 
+/* Key 自检：把 password 输入框里看不见的内容摊开，供用户对照控制台核对 */
+.key-check {
+  margin: -2px 0 4px;
+  padding: 9px 11px 9px 26px;
+  list-style: disc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.key-check li.is-info {
+  color: var(--muted);
+}
+
+.key-check li.is-warn {
+  color: var(--warn);
+}
+
+.key-check li + li {
+  margin-top: 3px;
+}
+
 /* Mock 模式下模型配置不生效：收起并说明，避免两个模式的面板长得一模一样 */
 .config-off {
   padding: 11px 12px;
