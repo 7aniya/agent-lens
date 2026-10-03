@@ -6,9 +6,11 @@
   "description": "AI Agent 执行过程可视化控制台 — 让 Agent 的规划、工具调用、知识检索与推理过程全部可见",
   "scripts": {
     "dev": "vite",
+    "dev:api": "node tools/dev-api-server.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "vectors": "node scripts/build-vectors.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",
@@ -19,6 +21,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.21.5",
     "typescript": "^5.6.3",
     "vite": "^5.4.11"
   }
