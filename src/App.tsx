@@ -97,7 +97,7 @@ function FallbackBanner({ onOpenSettings }: { onOpenSettings: () => void }) {
         </span>
       </div>
       <button type="button" className="btn btn-primary btn-sm" onClick={onOpenSettings}>
-        去填写 API Key
+        查看设置
       </button>
     </div>
   )

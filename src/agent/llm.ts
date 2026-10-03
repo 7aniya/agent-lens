@@ -12,6 +12,8 @@
  *     必须在这一层翻译成用户能看懂、能行动的话。
  *  2. 严格遵循 OpenAI 协议的发包细节（例如带 tool_calls 的 assistant 消息，
  *     content 必须是 null 而不是空字符串），否则在智谱等严格实现上会被 400 拒绝。
+ *  3. 支持「服务端托管」形态：Base URL 指向同源的 /api/llm-proxy 时，
+ *     密钥由服务端持有，前端不发送 Authorization 头。
  */
 
 import type { LLMConfig } from './types'
@@ -33,7 +35,7 @@ export interface LLMToolCall {
   function: { name: string; arguments: string }
 }
 
-export type LLMErrorKind = 'network' | 'http' | 'parse'
+export type LLMErrorKind = 'network' | 'http' | 'parse' | 'proxy'
 
 /** 按 HTTP 状态码给出的排查方向 */
 const STATUS_ADVICE: Record<number, string[]> = {
@@ -84,8 +86,89 @@ export class LLMError extends Error {
   }
 }
 
+/**
+ * 是否走服务端托管模式。
+ *
+ * 判据是「Base URL 为同源相对路径」——以 / 开头就意味着请求会打到自己这个域名下，
+ * 密钥天然由服务端持有。用路径形态而不是用哨兵 Key 来判断，
+ * 是因为路径决定了请求实际发往哪里，这是更本质的事实；
+ * 哨兵 Key 只是给「用户没有也不需要填写」这件事一个可存储的表示。
+ */
+export function isServerManaged(config: LLMConfig): boolean {
+  return config.baseUrl.trim().startsWith('/')
+}
+
+export interface ProxyStatus {
+  /** 代理地址是否可达（区分「服务端没配密钥」与「压根连不上」两种情况） */
+  reachable: boolean
+  /** 代理是否已配置密钥。false 表示服务端明确回了「未配置」 */
+  configured: boolean
+  reason?: string
+}
+
+let proxyProbe: Promise<ProxyStatus> | null = null
+
+/**
+ * 探测服务端代理是否可用。
+ *
+ * 为什么要先探一次？
+ * 部署版默认走服务端托管，但服务端可能还没配密钥。那种情况下，
+ * 直接发起对话会抛出一个「模型请求失败」的错误 —— 对第一次打开链接的访客来说，
+ * 这个第一印象是「这东西坏了」。先探一次，就能在运行开始前
+ * 干净地回退到 Mock 并说明原因，把一次失败变成一次可解释的降级。
+ *
+ * 结果会缓存：这是一次额外的网络往返，没必要每次运行都付。
+ */
+export function checkServerManaged(config: LLMConfig): Promise<ProxyStatus> {
+  if (!isServerManaged(config)) {
+    return Promise.resolve({ reachable: true, configured: true })
+  }
+  if (!proxyProbe) {
+    proxyProbe = (async (): Promise<ProxyStatus> => {
+      try {
+        const response = await fetch(endpoint(config), { method: 'GET' })
+        if (response.ok) return { reachable: true, configured: true }
+        if (response.status === 501) {
+          const payload = (await response.json().catch(() => null)) as {
+            error?: { message?: string }
+          } | null
+          return {
+            reachable: true,
+            configured: false,
+            reason: payload?.error?.message ?? '服务端未配置模型密钥',
+          }
+        }
+        // 429 之类属于「能用但现在不行」，不该被当成未配置而永久降级
+        return { reachable: true, configured: true }
+      } catch (error) {
+        return { reachable: false, configured: true, reason: (error as Error).message }
+      }
+    })()
+  }
+  return proxyProbe
+}
+
+/** 重置探测缓存。仅测试使用。 */
+export function __resetProxyProbe(): void {
+  proxyProbe = null
+}
+
+function baseOf(config: LLMConfig): string {
+  return config.baseUrl.trim().replace(/\/+$/, '')
+}
+
+/**
+ * 拼接实际请求地址。
+ *
+ * 这里有个曾经踩过的坑：原来无条件拼 `${base}/chat/completions`，
+ * 于是在服务端托管模式下会请求 /api/llm-proxy/chat/completions，
+ * 而代理函数只注册在 /api/llm-proxy —— 结果是 404，
+ * 现象像「代理没生效」，实际是路径拼错了。
+ * 现在同源代理直接用 Base URL 本身，由代理负责补上游路径。
+ */
 function endpoint(config: LLMConfig): string {
-  const base = config.baseUrl.trim().replace(/\/+$/, '')
+  const base = baseOf(config)
+  if (isServerManaged(config)) return base
   return `${base}/chat/completions`
 }
 
@@ -104,14 +187,18 @@ export function normalizeApiKey(apiKey: string): string {
 }
 
 function headers(config: LLMConfig): Record<string, string> {
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${normalizeApiKey(config.apiKey)}`,
-  }
+  const base: Record<string, string> = { 'Content-Type': 'application/json' }
+  // 服务端托管时不发送 Authorization：密钥不在前端，也不该经由浏览器流转
+  if (isServerManaged(config)) return base
+  return { ...base, Authorization: `Bearer ${normalizeApiKey(config.apiKey)}` }
 }
 
-/** 判断配置里是否真有一把能发出去的 Key：全是空白或零宽字符都算没填 */
+/**
+ * 判断配置里是否具备发起真实调用的条件。
+ * 服务端托管模式视为「已配置」——密钥由服务端负责，前端无从也不必校验。
+ */
 export function hasApiKey(config: LLMConfig): boolean {
+  if (isServerManaged(config)) return true
   return normalizeApiKey(config.apiKey).length > 0
 }
 
@@ -150,6 +237,17 @@ export interface KeyNote {
  */
 export function inspectApiKey(apiKey: string, baseUrl: string): KeyNote[] {
   const notes: KeyNote[] = []
+
+  // 服务端托管下前端根本没有 Key，对着一片空白做「Key 形态检查」只会误导
+  if (baseUrl.trim().startsWith('/')) {
+    return [
+      {
+        level: 'info',
+        text: '当前为服务端托管模式：密钥保存在服务器环境变量中，浏览器不接触它。若出现鉴权失败，请检查部署环境的 LLM_API_KEY。',
+      },
+    ]
+  }
+
   const key = normalizeApiKey(apiKey)
   const warn = (text: string) => notes.push({ level: 'warn', text })
 
@@ -215,6 +313,17 @@ function serverErrorBrief(raw: string): string | null {
   }
 }
 
+/** 代理自身的错误响应体（api/_shared/guard.ts 产出） */
+function proxyErrorBrief(raw: string): { message: string; hint?: string } | null {
+  try {
+    const parsed = JSON.parse(raw) as { error?: { code?: string; message?: string; hint?: string } }
+    if (!parsed.error?.message) return null
+    return { message: parsed.error.message, hint: parsed.error.hint }
+  } catch {
+    return null
+  }
+}
+
 /** 把非 2xx 响应转成带排查建议的 LLMError */
 async function ensureOk(response: Response, config: LLMConfig, url: string): Promise<void> {
   if (response.ok) return
@@ -226,7 +335,7 @@ async function ensureOk(response: Response, config: LLMConfig, url: string): Pro
     detail = '（无法读取响应内容）'
   }
 
-  const advice = STATUS_ADVICE[response.status]
+  const managed = isServerManaged(config)
   const brief = serverErrorBrief(detail)
   const lines = [
     `模型请求失败：HTTP ${response.status}`,
@@ -234,8 +343,37 @@ async function ensureOk(response: Response, config: LLMConfig, url: string): Pro
     `请求地址：${url}`,
     `模型名：${config.model}`,
   ]
+  if (managed) lines.push('调用方式：服务端托管（密钥由部署环境提供）')
   if (brief) lines.push(`服务端说明：${brief}`)
   lines.push(`服务端返回：${detail}`)
+
+  // 代理自己返回的错误已经带了完整说明，不需要再套一层「可能原因」；
+  // 而且那些排查建议（CORS、Key 格式）在托管模式下全是误导，
+  // 会把用户引向一个他根本不需要处理的方向。
+  if (managed) {
+    const proxy = proxyErrorBrief(detail)
+    if (proxy) {
+      lines.length = 0
+      lines.push(`模型请求被服务端拒绝：HTTP ${response.status}`, '', proxy.message)
+      if (proxy.hint) lines.push('', proxy.hint)
+      if (response.status === 501) {
+        lines.push(
+          '',
+          '这通常意味着部署环境还没有配置模型密钥。',
+          '你可以切到 Mock 模式先体验完整链路，或拉取仓库填入自己的 Key 本地运行。',
+        )
+      }
+      throw new LLMError({
+        kind: 'proxy',
+        status: response.status,
+        endpoint: url,
+        model: config.model,
+        text: lines.join('\n'),
+      })
+    }
+  }
+
+  const advice = STATUS_ADVICE[response.status]
   if (advice) {
     lines.push('', '可能原因：')
     advice.forEach((item, i) => lines.push(`${i + 1}. ${item}`))
@@ -313,6 +451,27 @@ async function safeFetch(
           '（粘贴时把多行内容一起复制进来最容易出现），浏览器会直接拒绝构造这个请求。',
           '',
           '处理：到「设置 → 模型配置」把 Base URL 和 API Key 清空后，重新粘贴一遍。',
+        ].join('\n'),
+      })
+    }
+
+    // 服务端托管模式下请求打的是同源地址，跨域不可能是原因，
+    // 更常见的是本地没起 Vercel 运行时（npm run dev 不带 API 路由）。
+    if (isServerManaged(config)) {
+      throw new LLMError({
+        kind: 'proxy',
+        endpoint: url,
+        model: config.model,
+        text: [
+          '未能连上服务端代理',
+          '',
+          `请求地址：${url}`,
+          `浏览器报错：${reason}`,
+          '',
+          '服务端托管模式需要部署环境或本地 Vercel 运行时才能工作：',
+          '· 本地开发：用 `npx vercel dev` 启动（它会同时挂载 api/ 下的路由），',
+          '  或直接切到 Mock 模式体验完整链路（检索分数与计算都是真实数据）。',
+          '· 线上：确认该地址已部署，且 /api/llm-proxy 路由存在。',
         ].join('\n'),
       })
     }

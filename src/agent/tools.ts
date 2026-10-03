@@ -6,9 +6,8 @@
  * Agent 运行时与 UI 都不需要改动 —— 这是这个项目在架构上的核心卖点。
  */
 
-import type { ChartSpec } from './types'
+import type { ChartSpec, HybridSearchOutcome } from './types'
 import type { RetrievalIndex } from './retrieval'
-import { search } from './retrieval'
 
 export interface ToolParamSchema {
   type: 'object'
@@ -23,6 +22,16 @@ export interface ToolContext {
   index: RetrievalIndex
   /** 工具可以抛出结构化图表，由运行时转成事件 */
   emitChart: (spec: ChartSpec) => void
+  /**
+   * 混合检索入口，由运行时注入。
+   *
+   * 为什么不直接在工具里调 searchBM25 / searchVector？
+   * 因为「用哪些通道、怎么融合、向量从哪来」属于检索策略，
+   * 是随环境变化的（有没有配 Embedding 密钥、语料有没有预计算向量）。
+   * 把它锁进工具定义，等于让每个用检索的工具都去关心这些环境细节，
+   * 将来加一个通道就要改一遍所有工具。放在上下文里注入，工具只管要结果。
+   */
+  hybridSearch: (query: string, topK: number) => Promise<HybridSearchOutcome>
 }
 
 export interface ToolRunResult {
@@ -146,7 +155,7 @@ function seededRandom(seed: number): () => number {
 const knowledgeSearchTool: ToolDefinition = {
   name: 'knowledge_search',
   description:
-    '在企业知识库中做语义检索，返回最相关的文档片段与相关度分数。当问题涉及公司制度、技术方案、操作规程、行业规则等需要依据的场景时使用，不要凭记忆回答这类问题。',
+    '在企业知识库中做混合检索（词汇匹配 + 语义向量），返回最相关的文档片段与相关度分数。当问题涉及公司制度、技术方案、操作规程、行业规则等需要依据的场景时使用，不要凭记忆回答这类问题。可以用自然语言直接提问，不必刻意堆砌关键词。',
   parameters: {
     type: 'object',
     properties: {
@@ -158,17 +167,25 @@ const knowledgeSearchTool: ToolDefinition = {
   async run(args, ctx) {
     const query = String(args.query ?? '')
     const topK = Number(args.topK ?? 4)
-    const hits = search(ctx.index, query, topK)
+    const { hits, trace } = await ctx.hybridSearch(query, topK)
+
     if (hits.length === 0) {
-      return { text: `未检索到与「${query}」相关的内容。建议更换关键词或确认知识库是否已收录该主题。` }
+      return {
+        text: `未检索到与「${query}」相关的内容。建议更换关键词或确认知识库是否已收录该主题。`,
+        data: { hits: [], trace },
+      }
     }
+
+    // 把「被哪个通道命中」也告诉模型：两个通道都指向同一段，
+    // 说明词汇信号与语义信号互相印证，模型引用它时更可靠。
     const text = hits
-      .map(
-        (hit, i) =>
-          `[${i + 1}] 《${hit.docTitle}》 相关度 ${(hit.score * 100).toFixed(0)}%\n${hit.snippet}`,
-      )
+      .map((hit, i) => {
+        const via = hit.channels.map((c) => (c === 'bm25' ? '词汇' : '语义')).join('+')
+        return `[${i + 1}] 《${hit.docTitle}》 相关度 ${(hit.score * 100).toFixed(0)}%（命中通道：${via}）\n${hit.snippet}`
+      })
       .join('\n\n')
-    return { text, data: { hits } }
+
+    return { text, data: { hits, trace } }
   },
 }
 

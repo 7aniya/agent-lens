@@ -86,7 +86,11 @@ export function StreamPanel() {
               if (!retrieval) return null
               return (
                 <div key={item.id} className="row-indent">
-                  <RetrievalCard query={retrieval.query} hits={retrieval.hits} />
+                  <RetrievalCard
+                    query={retrieval.query}
+                    hits={retrieval.hits}
+                    trace={retrieval.trace}
+                  />
                 </div>
               )
             }

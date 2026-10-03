@@ -4,10 +4,22 @@ import { AVAILABLE_TOOLS } from '../agent/runtime'
 import { BUILTIN_CORPUS, type KnowledgeDoc } from '../agent/corpus'
 import { buildRuntimeIndex } from '../agent/runtime'
 import { PROVIDER_PRESETS, matchPreset } from '../agent/providers'
-import { probeConnection, inspectApiKey, hasApiKey, type ProbeResult } from '../agent/llm'
+import {
+  probeConnection,
+  inspectApiKey,
+  hasApiKey,
+  isServerManaged,
+  type ProbeResult,
+} from '../agent/llm'
 import type { RunMode } from '../agent/types'
 
 const SPEEDS = [1, 2, 4]
+
+/** 「改为自填 Key」时回填的默认服务：永久免费且支持工具调用 */
+const SELF_HOSTED_DEFAULT = {
+  baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  model: 'glm-4.7-flash',
+}
 
 export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   const { state, dispatch } = useStore()
@@ -24,6 +36,14 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
 
   const stats = useMemo(() => buildRuntimeIndex(docs), [docs])
   const activePreset = matchPreset(settings.llm)
+
+  /**
+   * 是否处于服务端托管模式（Base URL 指向同源代理）。
+   * 托管时密钥在服务端，前端的 Key 输入框没有意义，
+   * 展示它只会让人以为「还差一步没配好」。
+   */
+  const managed = isServerManaged(settings.llm)
+
   /**
    * Key 自检：把用户填进去的字符串原样摊开（长度 + 首尾片段）。
    * 输入框是 password 类型，填错了根本看不出来，
@@ -106,11 +126,14 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               ))}
             </div>
             <p className="field-hint">
-              <b>Mock 离线</b>：内置确定性规划器 + 浏览器本地 BM25 检索，规划、工具调用、
-              图表全部在浏览器内完成，不发任何网络请求，结果可复现。
+              <b>Mock 离线</b>：内置确定性规划器驱动，规划、工具调用、图表全部在浏览器内完成，
+              不发任何网络请求，结果可复现。检索走真实的混合检索实现，
+              所以返回的相关度分数与命中切片都是真实数据。
               <br />
-              <b>真实模型</b>：由大模型自主拆解任务、决定调用哪个工具，需要下方配置
-              OpenAI 兼容接口的 Base URL 与 API Key。
+              <b>真实模型</b>：由大模型自主拆解任务、决定调用哪个工具。
+              {managed
+                ? '当前由服务端出密钥，无需填写任何配置。'
+                : '需要下方配置 OpenAI 兼容接口的 Base URL 与 API Key。'}
             </p>
             {settings.mode === 'live' && !hasApiKey(settings.llm) && (
               <p className="inline-warn">
@@ -125,15 +148,15 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
             <h3>
               模型配置
               <span className="section-meta">
-                {settings.mode === 'live' ? 'OpenAI 兼容' : 'Mock 模式不生效'}
+                {settings.mode === 'mock' ? 'Mock 模式不生效' : managed ? '服务端托管' : 'OpenAI 兼容'}
               </span>
             </h3>
 
             {settings.mode === 'mock' && !showLLMConfig ? (
               <div className="config-off">
                 <p>
-                  当前是 <b>Mock 离线模式</b>，模型配置<b>不生效</b>：规划、检索、
-                  工具调用全部在浏览器内完成，不会调用任何外部接口，也不需要 API Key。
+                  当前是 <b>Mock 离线模式</b>，模型配置<b>不生效</b>：规划、工具调用全部在浏览器内完成，
+                  不会调用任何外部接口，也不需要 API Key。
                 </p>
                 <div className="drawer-actions">
                   <button
@@ -161,144 +184,185 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                   </p>
                 )}
 
-                <div className="preset-grid">
-              {PROVIDER_PRESETS.map((preset) => {
-                const active = activePreset === preset.id
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    className={`preset-card ${active ? 'is-on' : ''}`}
-                    onClick={() =>
-                      updateLLM({
-                        baseUrl: preset.config.baseUrl,
-                        model: preset.config.model,
-                      })
-                    }
-                  >
-                    <span className="preset-name">
-                      {preset.name}
-                      {preset.permanentFree && <em className="preset-tag">永久免费</em>}
-                    </span>
-                    <span className="preset-note">{preset.freeNote}</span>
-                  </button>
-                )
-              })}
-            </div>
+                {managed ? (
+                  <div className="managed-note">
+                    <p>
+                      当前由 <b>服务端托管模型调用</b>：密钥保存在部署环境变量中，
+                      浏览器不接触它，也不需要你填写——打开页面即可直接对话。
+                    </p>
+                    <dl className="managed-grid">
+                      <dt>接口地址</dt>
+                      <dd>
+                        <code>{settings.llm.baseUrl}</code>
+                        <span className="managed-tag">同源代理</span>
+                      </dd>
+                      <dt>模型名</dt>
+                      <dd>
+                        <code>{settings.llm.model}</code>
+                        <span className="managed-tag">服务端设置 LLM_MODEL 时以服务端为准</span>
+                      </dd>
+                    </dl>
+                  </div>
+                ) : (
+                  <>
+                    <div className="preset-grid">
+                      {PROVIDER_PRESETS.map((preset) => {
+                        const active = activePreset === preset.id
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            className={`preset-card ${active ? 'is-on' : ''}`}
+                            onClick={() =>
+                              updateLLM({
+                                baseUrl: preset.config.baseUrl,
+                                model: preset.config.model,
+                              })
+                            }
+                          >
+                            <span className="preset-name">
+                              {preset.name}
+                              {preset.permanentFree && <em className="preset-tag">永久免费</em>}
+                            </span>
+                            <span className="preset-note">{preset.freeNote}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
 
-            <p className="field-hint">
-              {activePreset
-                ? (() => {
-                    const p = PROVIDER_PRESETS.find((x) => x.id === activePreset)!
-                    return (
-                      <>
-                        已选中「{p.name}」。申请 Key：
-                        <a href={p.signupUrl} target="_blank" rel="noreferrer">
-                          {p.signupUrl}
-                        </a>
-                        {p.corsOk ? '（实测支持浏览器直连）' : '（需服务端代理）'}
-                      </>
-                    )
-                  })()
-                : '未匹配到预设，当前为自定义配置。点上方任意卡片可一键填入。'}{' '}
-              Key 只存在浏览器 localStorage，不会上传。
-            </p>
+                    <p className="field-hint">
+                      {activePreset
+                        ? (() => {
+                            const p = PROVIDER_PRESETS.find((x) => x.id === activePreset)!
+                            return (
+                              <>
+                                已选中「{p.name}」。申请 Key：
+                                <a href={p.signupUrl} target="_blank" rel="noreferrer">
+                                  {p.signupUrl}
+                                </a>
+                                {p.corsOk ? '（实测支持浏览器直连）' : '（需服务端代理）'}
+                              </>
+                            )
+                          })()
+                        : '未匹配到预设，当前为自定义配置。点上方任意卡片可一键填入。'}{' '}
+                      Key 只存在浏览器 localStorage，不会上传。
+                    </p>
 
-            <label className="field">
-              <span className="field-label">Base URL</span>
-              <input
-                className="input"
-                value={settings.llm.baseUrl}
-                onChange={(e) => updateLLM({ baseUrl: e.target.value })}
-                placeholder="https://open.bigmodel.cn/api/paas/v4"
-                spellCheck={false}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">API Key</span>
-              <input
-                className="input"
-                type="password"
-                value={settings.llm.apiKey}
-                onChange={(e) => updateLLM({ apiKey: e.target.value })}
-                placeholder="sk-..."
-                spellCheck={false}
-              />
-            </label>
-            {keyNotes.length > 0 && (
-              <ul className="key-check">
-                {keyNotes.map((note) => (
-                  <li key={note.text} className={note.level === 'info' ? 'is-info' : 'is-warn'}>
-                    {note.text}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <label className="field">
-              <span className="field-label">模型名</span>
-              <input
-                className="input"
-                value={settings.llm.model}
-                onChange={(e) => updateLLM({ model: e.target.value })}
-                placeholder="glm-4.7-flash"
-                spellCheck={false}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">
-                Temperature <b>{settings.llm.temperature.toFixed(1)}</b>
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.1}
-                value={settings.llm.temperature}
-                onChange={(e) => updateLLM({ temperature: Number(e.target.value) })}
-              />
-            </label>
-            <div className="probe-box">
-              <div className="probe-head">
-                <button
-                  type="button"
-                  className="btn btn-soft btn-sm"
-                  onClick={() => void runProbe()}
-                  disabled={probing || !hasApiKey(settings.llm)}
-                >
-                  {probing ? '测试中…' : '测试连接'}
-                </button>
-                {probe && (
-                  <span className={`probe-badge ${probe.ok ? 'is-ok' : 'is-bad'}`}>
-                    {probe.ok
-                      ? `连接正常 · ${probe.latencyMs}ms`
-                      : `连接失败 · ${probe.latencyMs}ms`}
+                    <label className="field">
+                      <span className="field-label">Base URL</span>
+                      <input
+                        className="input"
+                        value={settings.llm.baseUrl}
+                        onChange={(e) => updateLLM({ baseUrl: e.target.value })}
+                        placeholder="https://open.bigmodel.cn/api/paas/v4"
+                        spellCheck={false}
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">API Key</span>
+                      <input
+                        className="input"
+                        type="password"
+                        value={settings.llm.apiKey}
+                        onChange={(e) => updateLLM({ apiKey: e.target.value })}
+                        placeholder="sk-..."
+                        spellCheck={false}
+                      />
+                    </label>
+                    {keyNotes.length > 0 && (
+                      <ul className="key-check">
+                        {keyNotes.map((note) => (
+                          <li
+                            key={note.text}
+                            className={note.level === 'info' ? 'is-info' : 'is-warn'}
+                          >
+                            {note.text}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+
+                <label className="field">
+                  <span className="field-label">模型名</span>
+                  <input
+                    className="input"
+                    value={settings.llm.model}
+                    onChange={(e) => updateLLM({ model: e.target.value })}
+                    placeholder="glm-4.7-flash"
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">
+                    Temperature <b>{settings.llm.temperature.toFixed(1)}</b>
                   </span>
-                )}
-                {!hasApiKey(settings.llm) && (
-                  <span className="probe-note">填入 API Key 后可测试</span>
-                )}
-              </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.1}
+                    value={settings.llm.temperature}
+                    onChange={(e) => updateLLM({ temperature: Number(e.target.value) })}
+                  />
+                </label>
+                <div className="probe-box">
+                  <div className="probe-head">
+                    <button
+                      type="button"
+                      className="btn btn-soft btn-sm"
+                      onClick={() => void runProbe()}
+                      disabled={probing || !hasApiKey(settings.llm)}
+                    >
+                      {probing ? '测试中…' : '测试连接'}
+                    </button>
+                    {probe && (
+                      <span className={`probe-badge ${probe.ok ? 'is-ok' : 'is-bad'}`}>
+                        {probe.ok
+                          ? `连接正常 · ${probe.latencyMs}ms`
+                          : `连接失败 · ${probe.latencyMs}ms`}
+                      </span>
+                    )}
+                    {!hasApiKey(settings.llm) && (
+                      <span className="probe-note">填入 API Key 后可测试</span>
+                    )}
+                  </div>
 
-              {probe?.ok && (
-                <p className="field-hint">
-                  接口 {probe.endpoint}；服务端回显模型 <b>{probe.echoModel || '（未返回）'}</b>；
-                  回复「{probe.reply || '（空）'}」。
-                  {probe.echoModel && probe.echoModel !== probe.model && (
-                    <>
-                      {' '}
-                      注意：回显模型与填写的模型名不一致，可能是服务端做了别名映射或路由。
-                    </>
+                  {probe?.ok && (
+                    <p className="field-hint">
+                      接口 {probe.endpoint}；服务端回显模型 <b>{probe.echoModel || '（未返回）'}</b>；
+                      回复「{probe.reply || '（空）'}」。
+                      {probe.echoModel && probe.echoModel !== probe.model && (
+                        <>
+                          {' '}
+                          注意：回显模型与填写的模型名不一致，可能是服务端做了别名映射或路由。
+                        </>
+                      )}
+                    </p>
                   )}
-                </p>
-              )}
-              {probe && !probe.ok && <pre className="error-detail">{probe.error}</pre>}
-            </div>
+                  {probe && !probe.ok && <pre className="error-detail">{probe.error}</pre>}
+                </div>
 
-            <p className="field-hint">
-              以上服务的跨域支持均为实测结果。若换成未开放 CORS 的接口（例如
-              z.ai 国际站），会出现浏览器拦截，此时可部署到 Vercel 后启用仓库内的{' '}
-              <code>api/llm-proxy.ts</code>，把 Key 放到服务端环境变量里。
-            </p>
+                {managed && (
+                  <div className="drawer-actions">
+                    <button
+                      type="button"
+                      className="btn btn-soft btn-sm"
+                      onClick={() =>
+                        updateLLM({ ...SELF_HOSTED_DEFAULT, apiKey: '' })
+                      }
+                    >
+                      改为自填 API Key
+                    </button>
+                  </div>
+                )}
+
+                <p className="field-hint">
+                  {managed
+                    ? '想看看换成别的模型会怎样？可以改为自填 Key，直连任意 OpenAI 兼容接口，配置只保存在本机浏览器。'
+                    : '以上服务的跨域支持均为实测结果。若换成未开放 CORS 的接口（例如 z.ai 国际站），会出现浏览器拦截，此时可部署到 Vercel 后启用仓库内的 api/llm-proxy.ts，把 Key 放到服务端环境变量里。'}
+                </p>
               </>
             )}
           </section>
@@ -369,6 +433,10 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                 e.target.value = ''
               }}
             />
+            <p className="field-hint">
+              内置语料的向量在构建期就已算好并随发布产物提供，所以语义检索不额外消耗额度；
+              导入自己的文档时才会实时编码。
+            </p>
             {notice && <p className="notice">{notice}</p>}
           </section>
 

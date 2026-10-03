@@ -40,14 +40,63 @@ export interface ToolCall {
   nodeId?: string
 }
 
+/**
+ * 检索通道。
+ * 混合检索的价值恰恰在于「两个通道各自召回什么」是可见的，
+ * 所以命中结果必须带上是哪个通道命中的，而不是融合完只留一个分数。
+ */
+export type RetrievalChannel = 'bm25' | 'vector'
+
 /** RAG 检索命中的一条切片 */
 export interface RetrievalHit {
   chunkId: string
   docId: string
   docTitle: string
   snippet: string
-  /** BM25 归一化后的相关度，0~1 */
+  /** 最终用于排序与展示的分数，0~1 */
   score: number
+  /** 词汇通道 BM25 归一化分数，未被该通道命中时为 undefined */
+  bm25Score?: number
+  /** 语义通道余弦相似度归一化分数，未被该通道命中时为 undefined */
+  vectorScore?: number
+  /** RRF 融合分数（未归一化，仅用于排序解释） */
+  rrfScore?: number
+  /**
+   * 命中该切片的通道列表。
+   * 两个通道都命中 → 说明词汇信号与语义信号一致，这种结果可信度最高，
+   * 界面上值得单独标出来，这是排查检索质量时最有用的一个信号。
+   */
+  channels: RetrievalChannel[]
+}
+
+/**
+ * 一次检索的完整过程记录。
+ *
+ * 为什么要把两个通道的原始结果都留下来？
+ * 只存融合后的 topK，就无法回答「这次答错到底是哪个通道拖后腿」——
+ * 而这是调 RAG 时最高频的问题。所以过程的每一步都要留证。
+ */
+export interface RetrievalTrace {
+  query: string
+  /** 词汇通道的 topK，始终存在（纯本地计算，不会失败） */
+  bm25: RetrievalHit[]
+  /** 语义通道的 topK；向量不可用时为 null */
+  vector: RetrievalHit[] | null
+  /** RRF 融合后的最终结果 */
+  fused: RetrievalHit[]
+  vectorStatus: 'ok' | 'unavailable' | 'failed'
+  /** 语义通道缺席时说明原因。检索降级必须显性，否则会被误判成「效果就这样」 */
+  note?: string
+  /** 语义通道额外耗时（含网络往返），用于衡量它到底值不值 */
+  vectorLatencyMs?: number
+  /** 融合策略标识，便于复现 */
+  fusion: 'rrf' | 'bm25-only'
+}
+
+/** 一次混合检索的产出：给模型用的命中 + 给人看的过程 */
+export interface HybridSearchOutcome {
+  hits: RetrievalHit[]
+  trace?: RetrievalTrace
 }
 
 export type MessageRole = 'user' | 'assistant' | 'tool'
@@ -101,7 +150,8 @@ export type AgentEvent =
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'tool_result'; callId: string; result: string; endedAt: number }
   | { type: 'tool_error'; callId: string; error: string; endedAt: number }
-  | { type: 'retrieval'; query: string; hits: RetrievalHit[] }
+  /** hits 为融合后的最终结果；trace 保留两个通道的过程，供对照分析 */
+  | { type: 'retrieval'; query: string; hits: RetrievalHit[]; trace?: RetrievalTrace }
   | { type: 'chart'; spec: ChartSpec }
   | { type: 'usage'; usage: RunUsage }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string }
@@ -136,7 +186,32 @@ export interface AppSettings {
   llm: LLMConfig
 }
 
-export const DEFAULT_SETTINGS: AppSettings = {
+/**
+ * 服务端托管模式的哨兵值。
+ *
+ * 部署版把百炼 Key 放在 Vercel 环境变量里，前端不需要也不应该持有它。
+ * 所以「Key 字段 = 这个哨兵」表示「这次请求走服务端代理」。
+ * 必须与「空 Key」区分开：空 Key 会触发回退到 Mock，
+ * 而哨兵代表真实模型可用的、且由服务端出密钥的一次调用。
+ */
+export const SERVER_MANAGED_KEY = '__server__'
+
+/**
+ * 当前是否具备使用服务端代理的条件。
+ *
+ * 本地 `npm run dev` 只起 vite，不带 api/ 下的函数路由，
+ * 所以默认只能跑 Mock；而部署环境（Vercel）默认就该是「打开即对话」。
+ * 用 hostname 判断而不是构建期变量：这样同一个构建产物在两种环境下
+ * 都能给出最合适的默认值，也不必为本地和线上维护两套配置。
+ */
+function canUseServerProxy(): boolean {
+  if (typeof window === 'undefined') return false
+  const host = window.location.hostname
+  return !/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|.*\.local)$/.test(host)
+}
+
+/** 本地开发用的默认配置：直连智谱，需要自己填 Key */
+const LOCAL_DEFAULTS: AppSettings = {
   mode: 'mock',
   speed: 1,
   llm: {
@@ -148,3 +223,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
     temperature: 0.3,
   },
 }
+
+/** 部署环境用的默认配置：走服务端代理，访客无需填写任何密钥 */
+const DEPLOYED_DEFAULTS: AppSettings = {
+  mode: 'live',
+  speed: 1,
+  llm: {
+    baseUrl: '/api/llm-proxy',
+    apiKey: SERVER_MANAGED_KEY,
+    model: 'qwen-plus',
+    temperature: 0.3,
+  },
+}
+
+export const DEFAULT_SETTINGS: AppSettings = canUseServerProxy()
+  ? DEPLOYED_DEFAULTS
+  : LOCAL_DEFAULTS

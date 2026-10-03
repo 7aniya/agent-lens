@@ -11,21 +11,44 @@
  *   3. 中断（AbortSignal）在任意 await 点都能干净退出
  */
 
-import type { AgentEvent, AppSettings, ChartSpec, PlanNode, ToolCall } from './types'
+import type {
+  AgentEvent,
+  AppSettings,
+  ChartSpec,
+  HybridSearchOutcome,
+  PlanNode,
+  RetrievalHit,
+  RetrievalTrace,
+  ToolCall,
+} from './types'
 import { TOOL_REGISTRY, getTool, toOpenAITools } from './tools'
-import { buildIndex, chunkDocuments, DEFAULT_CHUNK_OPTIONS } from './retrieval'
-import type { RetrievalIndex, Chunk } from './retrieval'
+import {
+  buildIndex,
+  chunkDocuments,
+  DEFAULT_CHUNK_OPTIONS,
+  hashText,
+  rrfFusion,
+  searchBM25,
+  searchVector,
+} from './retrieval'
+import type { Chunk, RetrievalIndex, VectorIndex } from './retrieval'
+import { EmbedUnavailableError, embedTexts, ensureVectorIndex } from './embedding'
 import { BUILTIN_CORPUS } from './corpus'
 import type { KnowledgeDoc } from './corpus'
 import { buildMockPlan, planWithLLM } from './planner'
 import type { MockToolResult } from './planner'
-import { chatTurn, streamChat, hasApiKey } from './llm'
+import { chatTurn, checkServerManaged, hasApiKey, streamChat } from './llm'
 import type { LLMMessage } from './llm'
+
+/** 语义通道的默认接入点 */
+export const DEFAULT_EMBED_ENDPOINT = '/api/embed'
 
 export interface RuntimeContext {
   settings: AppSettings
   docs: KnowledgeDoc[]
   signal?: AbortSignal
+  /** 覆盖语义通道地址，主要用于测试 */
+  embeddingEndpoint?: string
 }
 
 let idCounter = 0
@@ -79,10 +102,174 @@ export function buildRuntimeIndex(docs: KnowledgeDoc[]): {
   return { index: buildIndex(chunks), chunkCount: chunks.length }
 }
 
+/* ------------------------------------------------------------------ */
+/* 检索器：把「词汇 + 语义 + 融合」组装成一个可注入的能力               */
+/* ------------------------------------------------------------------ */
+
+export interface Retriever {
+  index: RetrievalIndex
+  /** 语义通道的向量集合；为 null 表示本次只能用词汇通道 */
+  vector: VectorIndex | null
+  /** 语义通道的状态说明（不可用或部分覆盖时给出原因） */
+  vectorNote?: string
+  search: (query: string, topK: number) => Promise<HybridSearchOutcome>
+}
+
+function docsFingerprint(docs: KnowledgeDoc[]): string {
+  return hashText(docs.map((d) => `${d.id}\u0000${d.title}\u0000${d.content}`).join('\u0001'))
+}
+
+/**
+ * 检索器准备一次后缓存复用。
+ *
+ * 为什么要缓存？因为准备过程包含一次网络往返（拉取或编码向量），
+ * 而语料在一次会话里通常是稳定的。每次点「运行」都重来一遍，
+ * 既慢又白烧额度，还会让首屏多等一轮。
+ * 缓存键取「语料指纹 + 接入地址」：语料一变自动失效，不需要手动清理。
+ */
+let retrieverCache: { key: string; promise: Promise<Retriever> } | null = null
+
+export function prepareRetriever(ctx: RuntimeContext): Promise<Retriever> {
+  const endpoint = ctx.embeddingEndpoint ?? DEFAULT_EMBED_ENDPOINT
+  const key = `${docsFingerprint(ctx.docs)}::${endpoint}`
+  if (retrieverCache?.key === key) return retrieverCache.promise
+
+  const promise = buildRetriever(ctx.docs, endpoint)
+  retrieverCache = { key, promise }
+  return promise
+}
+
+/** 清空检索器缓存。语料被替换或测试时使用。 */
+export function invalidateRetriever(): void {
+  retrieverCache = null
+}
+
+async function buildRetriever(docs: KnowledgeDoc[], endpoint: string): Promise<Retriever> {
+  const chunks = chunkDocuments(docs, DEFAULT_CHUNK_OPTIONS)
+  const index = buildIndex(chunks)
+
+  // 这里刻意不传运行时的 AbortSignal：检索器是跨运行共享的，
+  // 若被某次取消连带中断，缓存里就会留下一个永久 reject 的 promise，
+  // 之后所有运行都会莫名其妙地拿不到语义通道。
+  const { index: vector, note } = await ensureVectorIndex(chunks, { endpoint })
+
+  const search = async (query: string, topK: number): Promise<HybridSearchOutcome> => {
+    const bm25 = searchBM25(index, query, topK)
+
+    // 没有向量就退回纯词汇检索。这不是异常路径而是设计内的降级，
+    // 但必须把原因带出去让界面说清楚，否则会被误判成「就这水平」。
+    if (!vector) {
+      const trace: RetrievalTrace = {
+        query,
+        bm25,
+        vector: null,
+        fused: bm25,
+        vectorStatus: 'unavailable',
+        note,
+        fusion: 'bm25-only',
+      }
+      return { hits: bm25, trace }
+    }
+
+    const startedAt = Date.now()
+    try {
+      const [queryVector] = await embedTexts([query], { endpoint })
+      if (!queryVector || queryVector.length === 0) {
+        throw new Error('查询语句未能编码为向量')
+      }
+      const vectorHits = searchVector(index, vector, queryVector, topK)
+      const fused = rrfFusion(bm25, vectorHits, topK)
+      return {
+        hits: fused,
+        trace: {
+          query,
+          bm25,
+          vector: vectorHits,
+          fused,
+          vectorStatus: 'ok',
+          note,
+          vectorLatencyMs: Date.now() - startedAt,
+          fusion: 'rrf',
+        },
+      }
+    } catch (error) {
+      const reason =
+        error instanceof EmbedUnavailableError ? error.message : (error as Error).message
+      // 单次失败只影响这一次检索，不该让整个运行挂掉 —— 词汇通道仍然可用
+      return {
+        hits: bm25,
+        trace: {
+          query,
+          bm25,
+          vector: null,
+          fused: bm25,
+          vectorStatus: 'failed',
+          note: `语义通道调用失败（${reason}），本次退化为纯 BM25 词汇检索。`,
+          vectorLatencyMs: Date.now() - startedAt,
+          fusion: 'bm25-only',
+        },
+      }
+    }
+  }
+
+  return { index, vector, vectorNote: note, search }
+}
+
+/** 把检索器状态转成运行日志，让「这一轮到底用了哪些通道」一目了然 */
+function retrieverLogs(retriever: Retriever): AgentEvent[] {
+  const events: AgentEvent[] = [
+    {
+      type: 'log',
+      level: 'info',
+      text: `已加载知识库，共 ${retriever.index.chunks.length} 个切片`,
+    },
+  ]
+
+  if (retriever.vector) {
+    events.push({
+      type: 'log',
+      level: 'info',
+      text: `语义通道就绪：${retriever.vector.model}（${retriever.vector.dim} 维）覆盖 ${retriever.vector.covered}/${retriever.vector.total} 个切片，检索采用 BM25 + 向量 + RRF 融合`,
+    })
+    if (retriever.vectorNote) {
+      events.push({ type: 'log', level: 'warn', text: retriever.vectorNote })
+    }
+  } else {
+    events.push({
+      type: 'log',
+      level: 'warn',
+      text: retriever.vectorNote ?? '语义通道不可用，本次检索退化为纯 BM25 词汇检索',
+    })
+  }
+
+  return events
+}
+
+/** 从工具返回的附加数据里取出检索结果与过程记录 */
+function readRetrieval(resultData: Record<string, unknown> | undefined): {
+  hits?: RetrievalHit[]
+  trace?: RetrievalTrace
+} {
+  if (!resultData) return {}
+  return {
+    hits: resultData.hits as RetrievalHit[] | undefined,
+    trace: resultData.trace as RetrievalTrace | undefined,
+  }
+}
+
+/**
+ * 是否值得为这次工具结果发一条检索事件。
+ * 注意「检索了但没命中」也要发 —— 空结果比有结果更需要被看见，
+ * 否则用户无法区分「压根没检索」和「检索了没找到」，而这是两个完全不同的问题。
+ */
+function shouldEmitRetrieval(hits?: RetrievalHit[], trace?: RetrievalTrace): boolean {
+  return Boolean(trace) || Boolean(hits && hits.length > 0)
+}
+
 const SYSTEM_PROMPT = `你是 AgentLens 内置的智能体，负责回答新能源运营领域的问题。
 
 工作要求：
-1. 凡是涉及公司制度、技术方案、操作规程、行业规则的问题，必须先调用 knowledge_search 检索知识库，禁止凭记忆作答。
+1. 凡是涉及公司制度、技术方案、操作规程、行业规则的问题，必须先调用 knowledge_search 检索知识库，禁止凭记忆作答。检索采用「词汇 + 语义」混合策略，可以直接用自然语言提问，不必刻意堆砌关键词。
 2. 涉及数值计算时调用 calculator，不要心算。
 3. 涉及发电预测、出力曲线的请求调用 energy_forecast。
 4. 涉及收益测算、投资回报的请求调用 peak_valley_saving。
@@ -101,10 +288,12 @@ export async function* runMockAgent(
   const runId = uid('run')
   const startedAt = Date.now()
   const speed = ctx.settings.speed
-  const { index } = buildRuntimeIndex(ctx.docs)
 
   yield { type: 'run_start', runId, goal, mode: 'mock', startedAt }
-  yield { type: 'log', level: 'info', text: `已加载知识库，共 ${index.chunks.length} 个切片` }
+  yield { type: 'log', level: 'info', text: '正在准备知识库索引…' }
+
+  const retriever = await prepareRetriever(ctx)
+  for (const event of retrieverLogs(retriever)) yield event
 
   await sleep(260 / speed, ctx.signal)
   yield { type: 'log', level: 'info', text: '正在拆解任务…' }
@@ -166,8 +355,9 @@ export async function* runMockAgent(
         try {
           await sleep(Math.max(120, 520 / speed), ctx.signal)
           const result = await tool.run(step.args, {
-            index,
+            index: retriever.index,
             emitChart: (spec) => charts.push(spec),
+            hybridSearch: retriever.search,
           })
           resultText = result.text
           resultData = result.data
@@ -180,15 +370,9 @@ export async function* runMockAgent(
 
       completionTokens += estimateTokens(resultText)
 
-      const hits = resultData?.hits as
-        | { chunkId: string; docId: string; docTitle: string; snippet: string; score: number }[]
-        | undefined
-      if (hits && hits.length > 0) {
-        yield {
-          type: 'retrieval',
-          query: String(step.args.query ?? ''),
-          hits,
-        }
+      const { hits, trace } = readRetrieval(resultData)
+      if (shouldEmitRetrieval(hits, trace)) {
+        yield { type: 'retrieval', query: String(step.args.query ?? ''), hits: hits ?? [], trace }
       }
       for (const spec of charts) {
         yield { type: 'chart', spec }
@@ -228,10 +412,13 @@ export async function* runLiveAgent(
 ): AsyncGenerator<AgentEvent> {
   const runId = uid('run')
   const startedAt = Date.now()
-  const { index } = buildRuntimeIndex(ctx.docs)
 
   yield { type: 'run_start', runId, goal, mode: 'live', startedAt }
-  yield { type: 'log', level: 'info', text: `已加载知识库，共 ${index.chunks.length} 个切片` }
+  yield { type: 'log', level: 'info', text: '正在准备知识库索引…' }
+
+  const retriever = await prepareRetriever(ctx)
+  for (const event of retrieverLogs(retriever)) yield event
+
   yield { type: 'log', level: 'info', text: `模型：${ctx.settings.llm.model}` }
 
   let promptTokens = 0
@@ -311,23 +498,16 @@ export async function* runLiveAgent(
         } else {
           try {
             const result = await tool.run(args, {
-              index,
+              index: retriever.index,
               emitChart: (spec) => charts.push(spec),
+              hybridSearch: retriever.search,
             })
             resultText = result.text
             yield { type: 'tool_result', callId: call.id, result: resultText, endedAt: Date.now() }
 
-            const hits = result.data?.hits as
-              | {
-                  chunkId: string
-                  docId: string
-                  docTitle: string
-                  snippet: string
-                  score: number
-                }[]
-              | undefined
-            if (hits && hits.length > 0) {
-              yield { type: 'retrieval', query: String(args.query ?? ''), hits }
+            const { hits, trace } = readRetrieval(result.data)
+            if (shouldEmitRetrieval(hits, trace)) {
+              yield { type: 'retrieval', query: String(args.query ?? ''), hits: hits ?? [], trace }
             }
             for (const spec of charts) yield { type: 'chart', spec }
           } catch (error) {
@@ -380,39 +560,62 @@ export async function* runLiveAgent(
   }
 }
 
+/**
+ * 以 Mock 跑完，并在开头显式声明发生了回退。
+ *
+ * 回退事件必须排在 run_start 之后发：run_start 会重置状态，
+ * 若先发回退事件会被一起清掉，用户看到的就还是「切了模式但结果没变」。
+ */
+async function* runMockWithFallback(
+  goal: string,
+  ctx: RuntimeContext,
+  reason: string,
+): AsyncGenerator<AgentEvent> {
+  let emitted = false
+  for await (const event of runMockAgent(goal, ctx)) {
+    yield event
+    if (!emitted) {
+      emitted = true
+      yield {
+        type: 'mode_fallback',
+        requested: 'live',
+        actual: 'mock',
+        reason: `${reason}，本次实际以 Mock 模式运行`,
+      }
+      yield {
+        type: 'log',
+        level: 'warn',
+        text: `${reason}，已自动回退到 Mock 模式。可在右上角「设置」中调整。`,
+      }
+    }
+  }
+}
+
 export async function* runAgent(
   goal: string,
   ctx: RuntimeContext,
 ): AsyncGenerator<AgentEvent> {
-  if (ctx.settings.mode === 'live' && hasApiKey(ctx.settings.llm)) {
-    yield* runLiveAgent(goal, ctx)
+  if (ctx.settings.mode === 'live') {
+    if (!hasApiKey(ctx.settings.llm)) {
+      yield* runMockWithFallback(goal, ctx, '未配置 API Key')
+      return
+    }
+
+    // 服务端托管模式下先确认服务端到底配没配密钥。
+    // 不探这一次的话，服务端漏配密钥时访客会直接撞上一个「模型请求失败」的错误页 ——
+    // 对第一次打开链接的人来说，那等于「这东西是坏的」。
+    // 先探一次就能干净地降级到 Mock，把一次失败变成一次可解释的降级。
+    const status = await checkServerManaged(ctx.settings.llm)
+    if (status.configured) {
+      yield* runLiveAgent(goal, ctx)
+      return
+    }
+
+    yield* runMockWithFallback(goal, ctx, status.reason ?? '服务端未配置模型密钥')
     return
   }
 
-  const fellBack = ctx.settings.mode === 'live'
-  let emitted = false
-
-  for await (const event of runMockAgent(goal, ctx)) {
-    yield event
-    // runMockAgent 的第一个事件一定是 run_start，而 run_start 会清空回退标记。
-    // 所以回退事件必须排在它之后发，否则会被清掉，用户依然以为「切了模式没反应」。
-    if (!emitted) {
-      emitted = true
-      if (fellBack) {
-        yield {
-          type: 'mode_fallback',
-          requested: 'live',
-          actual: 'mock',
-          reason: '未配置 API Key，本次实际以 Mock 模式运行',
-        }
-        yield {
-          type: 'log',
-          level: 'warn',
-          text: '未配置 API Key，已自动回退到 Mock 模式。可在右上角「设置」中填写。',
-        }
-      }
-    }
-  }
+  yield* runMockAgent(goal, ctx)
 }
 
 export const AVAILABLE_TOOLS = TOOL_REGISTRY

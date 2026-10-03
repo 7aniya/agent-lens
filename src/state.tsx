@@ -22,6 +22,7 @@ import type {
   ChatMessage,
   PlanNode,
   RetrievalHit,
+  RetrievalTrace,
   RunMode,
   RunRecord,
   RunUsage,
@@ -57,7 +58,7 @@ export interface State {
   timeline: TimelineItem[]
   messages: ChatMessage[]
   toolCalls: ToolCall[]
-  retrievals: { id: string; query: string; hits: RetrievalHit[] }[]
+  retrievals: { id: string; query: string; hits: RetrievalHit[]; trace?: RetrievalTrace }[]
   charts: ChartSpec[]
   logs: LogEntry[]
   usage: RunUsage | null
@@ -258,7 +259,10 @@ function reduceEvent(state: State, event: AgentEvent): State {
       return {
         ...state,
         timeline: [...state.timeline, { kind: 'retrieval', id }],
-        retrievals: [...state.retrievals, { id, query: event.query, hits: event.hits }],
+        retrievals: [
+          ...state.retrievals,
+          { id, query: event.query, hits: event.hits, trace: event.trace },
+        ],
       }
     }
 

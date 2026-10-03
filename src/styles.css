@@ -1206,6 +1206,192 @@ code {
   margin-top: 4px;
 }
 
+/* ---- 混合检索：过程元信息与通道标记 ---- */
+
+.retrieval-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-soft);
+}
+
+.retrieval-meta-item {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.retrieval-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-2);
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 6px 9px;
+  margin-bottom: 8px;
+}
+
+/*
+ * 降级提示必须和普通说明在视觉上分开。
+ * 一条是「知道了」，另一条是「注意，能力被削弱了」——
+ * 混在一起显示时，用户会把能力降级当成正常状态。
+ */
+.retrieval-note.is-warn {
+  background: var(--warn-soft);
+  border-left-color: var(--warn);
+  color: var(--warn);
+}
+
+.retrieval-empty {
+  font-size: 11.8px;
+  color: var(--muted);
+  padding: 6px 0;
+}
+
+.channel-tags {
+  display: inline-flex;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.channel-tag {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+
+.channel-tag-bm25 {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+}
+
+.channel-tag-vector {
+  color: var(--accent-2);
+  background: var(--accent-2-soft);
+  border-color: var(--accent-2-soft);
+}
+
+/* 双通道命中是可信度最高的信号，加重边框让它在列表里跳出来 */
+.channel-tags.is-both .channel-tag {
+  border-color: currentColor;
+}
+
+.retrieval-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.retrieval-per-channel {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* ---- 两个通道各自的原始召回顺序 ---- */
+
+.retrieval-channels {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.retrieval-channels > summary {
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.retrieval-channels > summary::-webkit-details-marker {
+  display: none;
+}
+
+.retrieval-channels > summary::before {
+  content: '▸ ';
+}
+
+.retrieval-channels[open] > summary::before {
+  content: '▾ ';
+}
+
+.retrieval-channel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.retrieval-channel-col h4 {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.retrieval-channel-col ol {
+  list-style: none;
+  counter-reset: rank;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.retrieval-channel-col li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  counter-increment: rank;
+}
+
+.retrieval-channel-col li::before {
+  content: counter(rank);
+  width: 12px;
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--muted);
+}
+
+.retrieval-channel-doc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.retrieval-channel-score {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.retrieval-channel-hint {
+  margin-top: 8px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .retrieval-channel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ============================ 图表 ============================ */
 
 .chart-card {
@@ -1782,6 +1968,68 @@ input[type="range"] {
 .config-off b {
   color: var(--text-2);
   font-weight: 600;
+}
+
+/*
+ * 服务端托管模式说明。
+ * 用实线 + 强调色，与 Mock 模式下那个虚线「不生效」的框区分开：
+ * 这里是「已经配好了，你什么都不用做」，不是「还没配」。
+ */
+.managed-note {
+  padding: 11px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.managed-note > p {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.managed-note b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.managed-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin-top: 9px;
+}
+
+.managed-grid dt {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.managed-grid dd {
+  font-size: 11px;
+  color: var(--text-2);
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.managed-grid code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.managed-tag {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  white-space: nowrap;
 }
 
 .inline-note {
