@@ -35,7 +35,13 @@ export interface EmbedOptions {
   signal?: AbortSignal
 }
 
-export type EmbedFailureKind = 'not-configured' | 'rate-limited' | 'upstream' | 'network' | 'unknown'
+export type EmbedFailureKind =
+  | 'not-configured'
+  | 'rate-limited'
+  | 'upstream'
+  | 'network'
+  | 'model-mismatch'
+  | 'unknown'
 
 export class EmbedUnavailableError extends Error {
   kind: EmbedFailureKind
@@ -61,6 +67,21 @@ export interface PrecomputedVectors {
 /** 会话级向量缓存。键是文本指纹，所以语料微调后仍能命中未变化的切片。 */
 const vectorCache = new Map<string, number[]>()
 
+/**
+ * 服务端实际使用的 embedding 模型签名。
+ *
+ * 为什么需要记这个？因为「语料向量」和「查询向量」可能来自两个不同的模型：
+ * 前者是构建期用某个模型算好、随仓库分发的静态产物，
+ * 后者是运行时由服务端按 EMBEDDING_MODEL 现场编码的。
+ * 一旦部署时把 EMBEDDING_MODEL / EMBEDDING_DIM 配成跟产物不一致的值，
+ * 两条向量就落在**不同的语义空间**里 —— 余弦相似度仍然会算出一个 0~1 的数，
+ * 但它已经变成噪声。检索结果会全错，且**不报任何错**。
+ *
+ * 这类「看起来在正常工作、实际已经坏了」的故障最难排查，所以必须显式校验。
+ */
+let serverSignature: { model: string; dim: number } | null = null
+
+
 /** 服务端未配置密钥时的判定缓存，避免每次检索都发一次注定失败的请求 */
 let serverUnavailable: string | null = null
 
@@ -75,6 +96,7 @@ export function __resetEmbedState(): void {
   vectorCache.clear()
   serverUnavailable = null
   precomputedPromise = null
+  serverSignature = null
 }
 
 function resolveEndpoint(endpoint: string): string {
@@ -128,7 +150,7 @@ export async function embedTexts(texts: string[], opts: EmbedOptions): Promise<n
 
   for (let start = 0; start < missing.length; start += MAX_BATCH) {
     const slice = missing.slice(start, start + MAX_BATCH)
-    const vectors = await requestEmbedding(
+    const { vectors } = await requestEmbedding(
       slice.map((m) => m.text),
       opts,
     )
@@ -144,7 +166,10 @@ export async function embedTexts(texts: string[], opts: EmbedOptions): Promise<n
   return result
 }
 
-async function requestEmbedding(texts: string[], opts: EmbedOptions): Promise<number[][]> {
+async function requestEmbedding(
+  texts: string[],
+  opts: EmbedOptions,
+): Promise<{ vectors: number[][]; model: string | null }> {
   let res: Response
   try {
     res = await fetch(resolveEndpoint(opts.endpoint), {
@@ -182,8 +207,29 @@ async function requestEmbedding(texts: string[], opts: EmbedOptions): Promise<nu
     throw new EmbedUnavailableError('upstream', message, 'Embedding 服务返回异常，本次检索已降级。')
   }
 
-  const data = (await res.json()) as { vectors?: number[][] }
-  return data.vectors ?? []
+  const data = (await res.json()) as {
+    vectors?: number[][]
+    model?: string
+    dim?: number
+  }
+  const vectors = data.vectors ?? []
+
+  // 记下服务端真实使用的模型与维度。以「实际编码出来的向量长度」为准，
+  // 而不是服务端声明的 dim —— 万一两者不一致，长度才是真正参与计算的那个值。
+  const actualDim = vectors[0]?.length ?? data.dim ?? 0
+  if (data.model && actualDim > 0) {
+    serverSignature = { model: data.model, dim: actualDim }
+  }
+
+  return { vectors, model: data.model ?? null }
+}
+
+/**
+ * 服务端实际使用的 embedding 模型签名；在首次成功编码之前为 null。
+ * 供检索层校验「产物向量」与「查询向量」是否来自同一个语义空间。
+ */
+export function getServerEmbeddingSignature(): { model: string; dim: number } | null {
+  return serverSignature
 }
 
 /** 服务端是否已被判定为不可用；用于避免无谓的探测 */
@@ -202,6 +248,12 @@ export interface VectorIndexResult {
  *
  * 先吃预计算产物，未命中的部分（通常是用户上传的文档）再走实时编码。
  * 这样「内置语料开箱即用 + 自定义文档按需付费」两条路径共用一套逻辑。
+ *
+ * 一条硬约束：**索引必须是单一来源**。
+ * 产物向量由构建期的模型算出，实时向量由服务端模型算出，
+ * 两者若出自不同模型就落在不同语义空间，混在一个索引里做余弦比较没有意义
+ * （而且不会报错，只会让排序变成随机）。所以要么整批命中产物，
+ * 要么整批交给服务端重算，不做部分复用。
  */
 export async function ensureVectorIndex(
   chunks: Chunk[],
@@ -211,36 +263,40 @@ export async function ensureVectorIndex(
     return { index: null, note: '知识库为空' }
   }
 
-  const vectors = new Map<string, number[]>()
   const precomputed = await loadPrecomputedVectors()
-  const model = precomputed?.model ?? 'text-embedding-v3'
-  const dim = precomputed?.dim ?? 0
 
-  const pending: Chunk[] = []
-  for (const chunk of chunks) {
-    const vec = precomputed?.vectors[hashText(chunk.text)]
-    if (vec) vectors.set(chunk.id, vec)
-    else pending.push(chunk)
+  // 先看产物能否**完整**覆盖当前切片集合
+  const artifactVectors = new Map<string, number[]>()
+  if (precomputed) {
+    for (const chunk of chunks) {
+      const vec = precomputed.vectors[hashText(chunk.text)]
+      if (vec) artifactVectors.set(chunk.id, vec)
+    }
   }
 
+  const fullyCoveredByArtifact = artifactVectors.size === chunks.length
+
+  const vectors = new Map<string, number[]>()
   let note: string | undefined
   let reason: string | undefined
 
-  if (pending.length > 0) {
+  if (fullyCoveredByArtifact) {
+    for (const [id, vec] of artifactVectors) vectors.set(id, vec)
+  } else {
+    // 产物没命中（语料被替换）或只命中一部分（两个来源会混）→ 整批交给服务端
     if (serverUnavailable) {
       reason = serverUnavailable
     } else {
       try {
         const encoded = await embedTexts(
-          pending.map((c) => c.text),
+          chunks.map((c) => c.text),
           opts,
         )
-        pending.forEach((chunk, i) => {
+        chunks.forEach((chunk, i) => {
           if (encoded[i]) vectors.set(chunk.id, encoded[i])
         })
       } catch (error) {
-        reason =
-          error instanceof EmbedUnavailableError ? error.message : (error as Error).message
+        reason = error instanceof EmbedUnavailableError ? error.message : (error as Error).message
       }
     }
   }
@@ -259,10 +315,20 @@ export async function ensureVectorIndex(
     }，未覆盖部分只能靠词汇通道召回。`
   }
 
+  // 索引的模型签名必须以**实际产出这批向量的一方**为准。
+  // 这里不能想当然地取产物的 model：若非产物路径，向量的真实来源是服务端。
+  const signature = getServerEmbeddingSignature()
+  const fromArtifact = fullyCoveredByArtifact
+  const model = fromArtifact ? (precomputed?.model ?? 'unknown') : (signature?.model ?? 'unknown')
+  const dim =
+    (fromArtifact ? precomputed?.dim : signature?.dim) ||
+    vectors.values().next().value?.length ||
+    0
+
   return {
     index: {
       model,
-      dim: dim || (vectors.values().next().value?.length ?? 0),
+      dim,
       vectors,
       covered: vectors.size,
       total: chunks.length,

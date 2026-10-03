@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
-    "vectors": "node scripts/build-vectors.mjs"
+    "vectors": "node scripts/build-vectors.mjs",
+    "test:signature": "node tools/verify-embedding-signature.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",

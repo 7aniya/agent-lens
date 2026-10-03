@@ -32,7 +32,12 @@ import {
   searchVector,
 } from './retrieval'
 import type { Chunk, RetrievalIndex, VectorIndex } from './retrieval'
-import { EmbedUnavailableError, embedTexts, ensureVectorIndex } from './embedding'
+import {
+  EmbedUnavailableError,
+  embedTexts,
+  ensureVectorIndex,
+  getServerEmbeddingSignature,
+} from './embedding'
 import { BUILTIN_CORPUS } from './corpus'
 import type { KnowledgeDoc } from './corpus'
 import { buildMockPlan, planWithLLM } from './planner'
@@ -177,6 +182,19 @@ async function buildRetriever(docs: KnowledgeDoc[], endpoint: string): Promise<R
       if (!queryVector || queryVector.length === 0) {
         throw new Error('查询语句未能编码为向量')
       }
+
+      // 语料向量来自构建期产物，查询向量来自服务端现场编码 —— 两者必须出自同一个模型。
+      // 不一致时余弦相似度仍会算出一个 0~1 的数，但它已经是噪声，检索结果会全错而不报错。
+      // 这类「看起来在正常跑、实际已经坏了」的情况必须显式拦下。
+      const signature = getServerEmbeddingSignature()
+      if (signature && (signature.model !== vector.model || signature.dim !== vector.dim)) {
+        throw new EmbedUnavailableError(
+          'model-mismatch',
+          `服务端 embedding 模型（${signature.model} / ${signature.dim} 维）与预计算产物（${vector.model} / ${vector.dim} 维）不一致`,
+          '两者的向量不在同一语义空间，余弦相似度不可比。请把部署环境的 EMBEDDING_MODEL 与 EMBEDDING_DIM 改回产物所用的值；若确实要换模型，修改语料后重新运行 npm run vectors 生成对应产物。',
+        )
+      }
+
       const vectorHits = searchVector(index, vector, queryVector, topK)
       const fused = rrfFusion(bm25, vectorHits, topK)
       return {
