@@ -168,7 +168,7 @@ Key 中间含空格或换行，几乎可以确定是复制时多选了内容
 ## 快速开始
 
 ```bash
-git clone https://github.com/__GITHUB_USER__/agent-lens.git
+git clone https://github.com/7aniya/agent-lens.git
 cd agent-lens
 npm install
 npm run dev
